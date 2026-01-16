@@ -170,9 +170,10 @@ class StepProgress:
             message: Completion message
         """
         if self.is_tty:
-            print(f"\n{message} ✓")
+            sys.stdout.write(f"\n{message} ✓\n")
         else:
-            print(f"{message}")
+            sys.stdout.write(f"{message}\n")
+        sys.stdout.flush()
 
 
 @contextmanager
