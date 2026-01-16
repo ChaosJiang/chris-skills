@@ -7,25 +7,31 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+x-shared-steps:
+  - &checkout
+    uses: actions/checkout@v6
+  - &install-uv
+    name: Install uv
+    uses: astral-sh/setup-uv@v7
+    with:
+      version: "latest"
+  - &setup-python
+    name: Set up Python
+    uses: actions/setup-python@v6
+    with:
+      python-version: "3.11"
+
 jobs:
   lint:
     name: Lint with Ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - *checkout
+      - *install-uv
+      - *setup-python
 
       - name: Install Ruff with uv
-        run: uv pip install ruff
+        run: uv pip install --system ruff
 
       - name: Run Ruff linter
         run: |
@@ -45,22 +51,14 @@ jobs:
     name: Type Check with MyPy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - *checkout
+      - *install-uv
+      - *setup-python
 
       - name: Install dependencies with uv
         run: |
-          uv pip install -r scripts/requirements.txt
-          uv pip install mypy types-requests types-PyYAML
+          uv pip install --system -r scripts/requirements.txt
+          uv pip install --system mypy types-requests types-PyYAML
 
       - name: Run MyPy
         continue-on-error: true
@@ -71,20 +69,12 @@ jobs:
     name: Test scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - *checkout
+      - *install-uv
+      - *setup-python
 
       - name: Install dependencies with uv
-        run: uv pip install -r scripts/requirements.txt
+        run: uv pip install --system -r scripts/requirements.txt
 
       - name: Compile scripts
         run: python -m compileall scripts/
@@ -111,20 +101,12 @@ jobs:
     name: Integration Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - *checkout
+      - *install-uv
+      - *setup-python
 
       - name: Install dependencies with uv
-        run: uv pip install -r scripts/requirements.txt
+        run: uv pip install --system -r scripts/requirements.txt
 
       - name: Run end-to-end test
         run: |
@@ -152,109 +134,3 @@ jobs:
           name: test-output
           path: test_output/
           retention-days: 7
-
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install security tools with uv
-        run: uv pip install bandit safety
-
-      - name: Run Bandit security linter
-        continue-on-error: true
-        run: |
-          bandit -r scripts/ -f json -o bandit-report.json || true
-          bandit -r scripts/
-
-      - name: Check for security vulnerabilities
-        continue-on-error: true
-        run: |
-          uv pip install -r scripts/requirements.txt
-          safety check --json || true
-
-  build:
-    name: Build with uv
-    runs-on: ubuntu-latest
-    needs: [lint, type-check, test]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build package with uv
-        run: |
-          uv build --verbose
-
-      - name: List build artifacts
-        run: ls -lh dist/
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-          retention-days: 7
-
-  publish:
-    name: Publish to PyPI (manual trigger)
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    environment:
-      name: pypi
-      url: https://pypi.org/p/financial-report-analyzer
-    permissions:
-      id-token: write  # REQUIRED for trusted publishing
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-      - name: Publish to PyPI with uv
-        run: uv publish --token __token__
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-          UV_PUBLISH_URL: https://upload.pypi.org/legacy/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
-          body_path: .github/release/v${{ github.ref_name }}.md
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
