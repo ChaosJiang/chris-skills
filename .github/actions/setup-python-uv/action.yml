@@ -1,0 +1,17 @@
+name: Setup Python with uv
+description: Checkout, install uv, and set up Python
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.11"

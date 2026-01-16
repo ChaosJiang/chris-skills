@@ -7,28 +7,12 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
-x-shared-steps:
-  - &checkout
-    uses: actions/checkout@v6
-  - &install-uv
-    name: Install uv
-    uses: astral-sh/setup-uv@v7
-    with:
-      version: "latest"
-  - &setup-python
-    name: Set up Python
-    uses: actions/setup-python@v6
-    with:
-      python-version: "3.11"
-
 jobs:
   lint:
     name: Lint with Ruff
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install Ruff with uv
         run: uv pip install --system ruff
@@ -51,9 +35,7 @@ jobs:
     name: Type Check with MyPy
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies with uv
         run: |
@@ -69,9 +51,7 @@ jobs:
     name: Test scripts
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies with uv
         run: uv pip install --system -r scripts/requirements.txt
@@ -101,9 +81,7 @@ jobs:
     name: Integration Test
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies with uv
         run: uv pip install --system -r scripts/requirements.txt
