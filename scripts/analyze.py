@@ -600,28 +600,25 @@ def main() -> None:
         validation = dq.get("validation", {})
         field_matching = dq.get("field_matching", {})
 
-        print(f"✓ Saved analysis to {output_path}")
+        logger.info(f"Saved analysis to {output_path}")
 
         # Show data quality warnings if any
         if validation.get("failed", 0) > 0:
-            print(f"\n⚠️  {validation['failed']} validation warnings detected")
+            logger.warning(f"{validation['failed']} validation warnings detected")
 
         if field_matching.get("fuzzy_matches", 0) > 0:
-            print(
-                f"⚠️  {field_matching['fuzzy_matches']} fields matched using fuzzy matching"
+            logger.warning(
+                f"{field_matching['fuzzy_matches']} fields matched using fuzzy matching"
             )
 
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
-        print(f"❌ Error: {e}")
         exit(1)
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON file: {e}")
-        print("❌ Error: Invalid JSON in input file")
         exit(1)
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        print(f"❌ Unexpected error: {e}")
         exit(1)
 
 

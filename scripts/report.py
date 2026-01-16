@@ -3,10 +3,13 @@
 
 import argparse
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from series_utils import series_from_mapping, series_rows
+
+logger = logging.getLogger(__name__)
 
 
 def series_from_dict(data: dict[str, float]):
@@ -323,7 +326,7 @@ def main() -> None:
     with open(output_path, "w", encoding="utf-8") as handle:
         handle.write(report)
 
-    print(f"Saved report to {output_path}")
+    logger.info(f"Saved report to {output_path}")
 
 
 if __name__ == "__main__":

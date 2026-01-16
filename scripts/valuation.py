@@ -438,19 +438,15 @@ def main() -> None:
             json.dump(valuation, handle, ensure_ascii=False, indent=2)
 
         logger.info(f"Successfully saved valuation to {output_path}")
-        print(f"✓ Saved valuation to {output_path}")
 
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
-        print(f"❌ Error: {e}")
         exit(1)
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON file: {e}")
-        print("❌ Error: Invalid JSON in input file")
         exit(1)
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        print(f"❌ Unexpected error: {e}")
         exit(1)
 
 

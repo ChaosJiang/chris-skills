@@ -3,11 +3,14 @@
 
 import argparse
 import json
+import logging
 import os
 from typing import Any
 
 import matplotlib.pyplot as plt
 from series_utils import series_from_mapping, series_rows
+
+logger = logging.getLogger(__name__)
 
 
 def series_from_dict(data: dict[str, float]):
@@ -95,7 +98,7 @@ def generate_charts(analysis: dict[str, Any], output_dir: str) -> None:
         os.path.join(output_dir, "price_history.png"),
     )
 
-    print(f"Saved charts to {output_dir}")
+    logger.info(f"Saved charts to {output_dir}")
 
 
 def main() -> None:

@@ -149,13 +149,11 @@ def main() -> None:
 
         # Dry-run mode: preview operations
         if args.dry_run:
-            print(f"\n{'=' * 60}")
-            print(f"DRY RUN MODE - Preview of operations for {symbol}")
-            print(f"{'=' * 60}\n")
-            print(f"Symbol: {symbol}")
-            print(f"Market: {market}")
-            print(f"Output directory: {output_dir}")
-            print("\nOperations that would be performed:")
+            logger.info(f"DRY RUN MODE - Preview of operations for {symbol}")
+            logger.info(f"Symbol: {symbol}")
+            logger.info(f"Market: {market}")
+            logger.info(f"Output directory: {output_dir}")
+            logger.info("Operations that would be performed:")
 
             if not args.refresh and is_fresh(data_path, args.max_age_hours):
                 data_payload = read_json(data_path)
@@ -165,26 +163,26 @@ def main() -> None:
                         data_path.stat().st_mtime, tz=timezone.utc
                     )
                 age_hours = hours_since(fetched_at)
-                print(f"  • Use cached data (age: {age_hours:.1f} hours)")
+                logger.info(f"  - Use cached data (age: {age_hours:.1f} hours)")
             else:
-                print(f"  • Fetch data from {market} market for {symbol}")
+                logger.info(f"  - Fetch data from {market} market for {symbol}")
 
-            print("  • Analyze financial data")
+            logger.info("  - Analyze financial data")
 
             if not args.skip_valuation:
-                print("  • Compute valuation metrics")
+                logger.info("  - Compute valuation metrics")
 
             if not args.skip_analyst:
-                print("  • Extract analyst recommendations")
+                logger.info("  - Extract analyst recommendations")
 
             if not args.skip_charts:
-                print(f"  • Generate {len(CHART_FILES)} charts")
+                logger.info(f"  - Generate {len(CHART_FILES)} charts")
 
             if not args.skip_report:
-                print("  • Generate markdown report")
+                logger.info("  - Generate markdown report")
 
-            print("\nNo files will be modified in dry-run mode.")
-            print("Run without --dry-run to execute these operations.\n")
+            logger.info("No files will be modified in dry-run mode.")
+            logger.info("Run without --dry-run to execute these operations.")
             return
 
         # Calculate total steps for progress tracking
@@ -214,11 +212,11 @@ def main() -> None:
                     fetched_at = parse_iso_datetime(data_payload.get("fetched_at"))
                     if fetched_at:
                         age_hours = hours_since(fetched_at)
-                        print(
-                            f"    Using cache (fetched {age_hours:.1f} hours ago): {data_path}"
+                        logger.info(
+                            f"Using cache (fetched {age_hours:.1f} hours ago): {data_path}"
                         )
                     else:
-                        print(f"    Using cached data: {data_path}")
+                        logger.info(f"Using cached data: {data_path}")
             else:
                 with sp.step(f"Fetching {symbol} from {market} market"):
                     data_payload = fetch_data_module.fetch_data(
@@ -234,7 +232,7 @@ def main() -> None:
                         }
                     )
                     write_json(data_path, data_payload)
-                    print(f"    Saved to: {data_path}")
+                    logger.info(f"Saved to: {data_path}")
 
             data_mtime = data_path.stat().st_mtime
 
@@ -243,10 +241,10 @@ def main() -> None:
                 if needs_update(analysis_path, [data_mtime]):
                     analysis_payload = analyze_module.build_analysis(data_payload)
                     write_json(analysis_path, analysis_payload)
-                    print(f"    Saved to: {analysis_path}")
+                    logger.info(f"Saved to: {analysis_path}")
                 else:
                     analysis_payload = read_json(analysis_path)
-                    print(f"    Using cache: {analysis_path}")
+                    logger.info(f"Using cache: {analysis_path}")
 
             analysis_mtime = analysis_path.stat().st_mtime
 
@@ -259,10 +257,10 @@ def main() -> None:
                             data_payload, analysis_payload
                         )
                         write_json(valuation_path, valuation_payload)
-                        print(f"    Saved to: {valuation_path}")
+                        logger.info(f"Saved to: {valuation_path}")
                     else:
                         valuation_payload = read_json(valuation_path)
-                        print(f"    Using cache: {valuation_path}")
+                        logger.info(f"Using cache: {valuation_path}")
 
             # Step 4: Extract analyst data
             analyst_payload: dict[str, Any] = {}
@@ -273,10 +271,10 @@ def main() -> None:
                             data_payload
                         )
                         write_json(analyst_path, analyst_payload)
-                        print(f"    Saved to: {analyst_path}")
+                        logger.info(f"Saved to: {analyst_path}")
                     else:
                         analyst_payload = read_json(analyst_path)
-                        print(f"    Using cache: {analyst_path}")
+                        logger.info(f"Using cache: {analyst_path}")
 
             # Step 5: Generate charts
             if not args.skip_charts:
@@ -285,9 +283,9 @@ def main() -> None:
                         visualize_module.generate_charts(
                             analysis_payload, str(charts_dir)
                         )
-                        print(f"    Saved to: {charts_dir}")
+                        logger.info(f"Saved to: {charts_dir}")
                     else:
-                        print(f"    Using cache: {charts_dir}")
+                        logger.info(f"Using cache: {charts_dir}")
 
             # Step 6: Generate report
             if not args.skip_report:
@@ -302,24 +300,22 @@ def main() -> None:
                             analysis_payload, valuation_payload, analyst_payload
                         )
                         report_path.write_text(report_text, encoding="utf-8")
-                        print(f"    Saved to: {report_path}")
+                        logger.info(f"Saved to: {report_path}")
                     else:
-                        print(f"    Using cache: {report_path}")
+                        logger.info(f"Using cache: {report_path}")
 
         # Print summary
-        print(f"\n{'=' * 60}")
-        print(f"Report generation complete for {symbol}")
-        print(f"{'=' * 60}")
+        logger.info(f"Report generation complete for {symbol}")
         company_name = analysis_payload.get("company", {}).get("name", symbol)
-        print(f"Company: {company_name}")
+        logger.info(f"Company: {company_name}")
         industry = analysis_payload.get("company", {}).get("industry")
         if industry:
-            print(f"Industry: {industry}")
+            logger.info(f"Industry: {industry}")
 
         latest_price = analysis_payload.get("price", {}).get("latest")
         currency = analysis_payload.get("company", {}).get("currency")
         if latest_price and currency:
-            print(f"Latest Price: {latest_price:.2f} {currency}")
+            logger.info(f"Latest Price: {latest_price:.2f} {currency}")
 
         # Show data quality warnings
         dq = analysis_payload.get("data_quality", {})
@@ -330,27 +326,24 @@ def main() -> None:
             validation.get("failed", 0) > 0
             or field_matching.get("fuzzy_matches", 0) > 0
         ):
-            print("\n⚠️  Data Quality Warnings:")
+            logger.warning("Data Quality Warnings:")
             if validation.get("failed", 0) > 0:
-                print(f"  • {validation['failed']} validation checks failed")
+                logger.warning(f"  {validation['failed']} validation checks failed")
             if field_matching.get("fuzzy_matches", 0) > 0:
-                print(
-                    f"  • {field_matching['fuzzy_matches']} fields matched using fuzzy matching"
+                logger.warning(
+                    f"  {field_matching['fuzzy_matches']} fields matched using fuzzy matching"
                 )
 
-        print(f"\nReport saved to: {report_path}")
-        print(f"{'=' * 60}\n")
+        logger.info(f"Report saved to: {report_path}")
 
     except FinancialReportError as e:
-        print(format_error_for_user(e))
+        logger.error(format_error_for_user(e))
         exit(1)
     except KeyboardInterrupt:
-        print("\n\n⚠️  Operation cancelled by user")
+        logger.warning("Operation cancelled by user")
         exit(130)
     except Exception as e:
         logger.error(f"Unexpected error in report pipeline: {e}", exc_info=True)
-        print(f"❌ Unexpected error: {e}")
-        print("\nCheck logs for more details.")
         exit(1)
 
 

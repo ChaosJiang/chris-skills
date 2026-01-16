@@ -139,7 +139,7 @@ def get_quarterly_cashflow(ticker: yf.Ticker) -> Any:
     return {}
 
 
-def fetch_yfinance(symbol: str, years: int, price_years: int) -> dict[str, Any]:
+def fetch_yfinance(symbol: str, _years: int, price_years: int) -> dict[str, Any]:
     """Fetch data from Yahoo Finance."""
     logger.info(f"Fetching yfinance data for {symbol}")
 
@@ -310,14 +310,12 @@ def main() -> None:
             json.dump(payload, handle, ensure_ascii=False, indent=2, default=str)
 
         logger.info(f"Successfully saved data to {output_path}")
-        print(f"✓ Saved data to {output_path}")
 
     except (DataFetchError, SymbolNotFoundError, APIError) as e:
-        print(format_error_for_user(e))
+        logger.error(format_error_for_user(e))
         exit(1)
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        print(f"❌ Unexpected error: {e}")
         exit(1)
 
 
