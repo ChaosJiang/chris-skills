@@ -210,7 +210,7 @@ def compute_yoy(series: pl.DataFrame) -> dict[str, Any]:
 
 
 def compute_cagr(series: pl.DataFrame) -> float | None:
-    dates, values = series_values(series)
+    _, values = series_values(series)
     if len(values) < 2:
         return None
     start = float(values[0])
