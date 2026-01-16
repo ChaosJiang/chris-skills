@@ -6,55 +6,74 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Iterable
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import yfinance as yf
 
+from series_utils import (
+    empty_series,
+    latest_value,
+    rows_from_payload,
+    series_from_mapping,
+    series_from_rows,
+    series_rows,
+    series_to_dict,
+)
 
-def to_series(data: Dict[str, Any]) -> pd.Series:
-    if not data:
-        return pd.Series(dtype=float)
-    series = pd.Series(data)
-    series.index = pd.to_datetime(series.index, errors="coerce", utc=True).tz_localize(
-        None
+
+def to_series(data: Dict[str, Any]) -> pl.DataFrame:
+    return series_from_mapping(data or {})
+
+
+def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
+    lookup = {str(key).lower(): str(key) for key in keys}
+    for candidate in candidates:
+        lowered = candidate.lower()
+        if lowered in lookup:
+            return lookup[lowered]
+    return None
+
+
+def to_price_series(payload: Dict[str, Any]) -> pl.DataFrame:
+    price_payload = payload.get("price_history", {}) or {}
+    if not price_payload:
+        return empty_series()
+    date_key = next(
+        (key for key in ["日期", "date", "Date"] if key in price_payload), None
     )
-    series = pd.to_numeric(series, errors="coerce")
-    series = series.dropna().sort_index()
-    return series
+    candidates = ["Close", "Adj Close", "收盘", "close"]
+    if date_key:
+        value_key = find_matching_key(
+            [key for key in price_payload.keys() if key != date_key], candidates
+        )
+        if not value_key:
+            return empty_series()
+        rows = rows_from_payload(price_payload, date_key)
+        return series_from_rows(rows, date_key, value_key)
+    for key in candidates:
+        column_map = price_payload.get(key)
+        if isinstance(column_map, dict):
+            return series_from_mapping(column_map)
+    return empty_series()
 
 
-def to_price_series(payload: Dict[str, Any]) -> pd.Series:
-    price_df = pd.DataFrame(payload.get("price_history", {}))
-    if price_df.empty:
-        return pd.Series(dtype=float)
-    price_df.index = pd.to_datetime(
-        price_df.index, errors="coerce", utc=True
-    ).tz_localize(None)
-    for key in ["Close", "Adj Close", "收盘", "close"]:
-        if key in price_df.columns:
-            series = pd.to_numeric(price_df[key], errors="coerce")
-            return series.dropna()
-    return pd.Series(dtype=float)
-
-
-def align_to_prices(snapshot: pd.Series, prices: pd.Series) -> pd.Series:
-    if prices.empty:
-        return pd.Series(dtype=float)
-    if snapshot.empty:
-        return pd.Series(index=prices.index, dtype=float)
-    snapshot = snapshot.dropna().sort_index()
-    if snapshot.empty:
-        return pd.Series(index=prices.index, dtype=float)
-    return snapshot.reindex(prices.index, method="ffill")
-
-
-def series_to_dict(series: pd.Series) -> Dict[str, float]:
-    if series.empty:
-        return {}
-    ordered = series.dropna().sort_index()
-    return {str(idx.date()): float(val) for idx, val in ordered.items()}
+def align_to_prices(snapshot: pl.DataFrame, prices: pl.DataFrame) -> pl.DataFrame:
+    if prices.height == 0:
+        return empty_series()
+    prices_sorted = prices.sort("date")
+    if snapshot.height == 0:
+        return prices_sorted.select(["date"]).with_columns(
+            pl.lit(None, dtype=pl.Float64).alias("value")
+        )
+    snapshot_sorted = snapshot.sort("date")
+    aligned = prices_sorted.rename({"value": "price"}).join_asof(
+        snapshot_sorted.rename({"value": "snapshot"}),
+        on="date",
+        strategy="backward",
+    )
+    return aligned.select(["date", "snapshot"]).rename({"snapshot": "value"})
 
 
 def fetch_fx_rate(base: Optional[str], quote: Optional[str]) -> Optional[float]:
@@ -65,9 +84,13 @@ def fetch_fx_rate(base: Optional[str], quote: Optional[str]) -> Optional[float]:
         try:
             ticker = yf.Ticker(symbol)
             history = ticker.history(period="5d", auto_adjust=False)
-            if "Close" not in history or history["Close"].dropna().empty:
+            close = history.get("Close") if hasattr(history, "get") else None
+            if close is None:
                 continue
-            rate = float(history["Close"].dropna().iloc[-1])
+            values = [float(val) for val in list(close) if np.isfinite(val)]
+            if not values:
+                continue
+            rate = values[-1]
             if rate == 0:
                 continue
             return 1 / rate if invert else rate
@@ -77,25 +100,68 @@ def fetch_fx_rate(base: Optional[str], quote: Optional[str]) -> Optional[float]:
 
 
 def convert_series(
-    series: pd.Series, fx_rate: Optional[float], apply_conversion: bool
-) -> pd.Series:
-    if series.empty:
-        return series
-    if not apply_conversion:
+    series: pl.DataFrame, fx_rate: Optional[float], apply_conversion: bool
+) -> pl.DataFrame:
+    if series.height == 0 or not apply_conversion:
         return series
     if fx_rate is None:
-        return pd.Series(dtype=float)
-    return series * fx_rate
+        return empty_series()
+    return series.with_columns((pl.col("value") * fx_rate).alias("value"))
 
 
-def percentile(current: Optional[float], history: pd.Series) -> Optional[float]:
-    if current is None or history.empty:
+def percentile(current: Optional[float], history: pl.DataFrame) -> Optional[float]:
+    if current is None or history.height == 0:
         return None
-    values = history.replace([np.inf, -np.inf], np.nan).dropna()
-    values = values[values > 0]
-    if values.empty:
+    values = [
+        value
+        for _, value in series_rows(history)
+        if value is not None and np.isfinite(value) and value > 0
+    ]
+    if not values:
         return None
-    return float((values <= current).sum() / len(values) * 100)
+    return float(sum(1 for value in values if value <= current) / len(values) * 100)
+
+
+def join_series(
+    left: pl.DataFrame, right: pl.DataFrame, left_name: str, right_name: str
+) -> pl.DataFrame:
+    if left.height == 0 or right.height == 0:
+        return pl.DataFrame()
+    left_df = left.rename({"value": left_name})
+    right_df = right.rename({"value": right_name})
+    return left_df.join(right_df, on="date", how="inner")
+
+
+def divide_series(
+    numerator: pl.DataFrame, denominator: pl.DataFrame, positive_only: bool = False
+) -> pl.DataFrame:
+    aligned = join_series(numerator, denominator, "num", "den")
+    if aligned.height == 0:
+        return empty_series()
+    if positive_only:
+        aligned = aligned.filter(pl.col("den") > 0)
+    else:
+        aligned = aligned.filter(pl.col("den") != 0)
+    if aligned.height == 0:
+        return empty_series()
+    result = aligned.with_columns((pl.col("num") / pl.col("den")).alias("value"))
+    return result.select(["date", "value"]).filter(pl.col("value").is_finite())
+
+
+def add_series(left: pl.DataFrame, right: pl.DataFrame) -> pl.DataFrame:
+    aligned = join_series(left, right, "left", "right")
+    if aligned.height == 0:
+        return empty_series()
+    result = aligned.with_columns((pl.col("left") + pl.col("right")).alias("value"))
+    return result.select(["date", "value"]).filter(pl.col("value").is_finite())
+
+
+def multiply_series(left: pl.DataFrame, right: pl.DataFrame) -> pl.DataFrame:
+    aligned = join_series(left, right, "left", "right")
+    if aligned.height == 0:
+        return empty_series()
+    result = aligned.with_columns((pl.col("left") * pl.col("right")).alias("value"))
+    return result.select(["date", "value"]).filter(pl.col("value").is_finite())
 
 
 def compute_dcf(
@@ -183,28 +249,19 @@ def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str,
     net_debt_daily = align_to_prices(net_debt_per_share, price_series)
     shares_daily = align_to_prices(shares_outstanding, price_series)
 
-    pe_daily = (price_series / eps_daily).where(eps_daily > 0)
-    ps_daily = (price_series / sales_daily).where(sales_daily > 0)
-    pb_daily = (price_series / book_daily).where(book_daily > 0)
-    ev_to_ebitda_daily = ((price_series + net_debt_daily) / ebitda_daily).where(
-        ebitda_daily > 0
+    pe_daily = divide_series(price_series, eps_daily, positive_only=True)
+    ps_daily = divide_series(price_series, sales_daily, positive_only=True)
+    pb_daily = divide_series(price_series, book_daily, positive_only=True)
+    ev_to_ebitda_daily = divide_series(
+        add_series(price_series, net_debt_daily), ebitda_daily, positive_only=True
     )
 
-    market_cap_daily = (price_series * shares_daily).replace([np.inf, -np.inf], np.nan)
+    market_cap_daily = multiply_series(price_series, shares_daily)
 
-    latest_date = price_series.index.max() if not price_series.empty else None
-    current_price = float(price_series.iloc[-1]) if latest_date is not None else None
-    current_market_cap = (
-        float(market_cap_daily.iloc[-1])
-        if latest_date is not None and not pd.isna(market_cap_daily.iloc[-1])
-        else None
-    )
-
-    def latest_value(series: pd.Series) -> Optional[float]:
-        if series.empty:
-            return None
-        value = series.iloc[-1]
-        return float(value) if not pd.isna(value) else None
+    price_rows = series_rows(price_series)
+    latest_date = price_rows[-1][0] if price_rows else None
+    current_price = price_rows[-1][1] if price_rows else None
+    current_market_cap = latest_value(market_cap_daily)
 
     current_metrics = {
         "pe": latest_value(pe_daily),
@@ -213,14 +270,12 @@ def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str,
         "ev_to_ebitda": latest_value(ev_to_ebitda_daily),
     }
 
-    valuation_mask = ~(
-        pe_daily.isna() & ps_daily.isna() & pb_daily.isna() & ev_to_ebitda_daily.isna()
-    )
-    window_start = (
-        price_series.index[valuation_mask.argmax()]
-        if not price_series.empty and valuation_mask.any()
-        else None
-    )
+    metric_dates = {
+        dt for dt, _ in series_rows(pe_daily)
+    } | {dt for dt, _ in series_rows(ps_daily)} | {dt for dt, _ in series_rows(pb_daily)} | {
+        dt for dt, _ in series_rows(ev_to_ebitda_daily)
+    }
+    window_start = min(metric_dates) if metric_dates else None
 
     fcf_ttm_total = to_series(
         analysis.get("financials_ttm", {}).get("free_cash_flow", {})
@@ -242,17 +297,15 @@ def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str,
         "window": {
             "start": str(window_start.date()) if window_start is not None else None,
             "end": str(latest_date.date()) if latest_date is not None else None,
-            "price_points": int(len(price_series)),
-            "valuation_days": int(valuation_mask.sum())
-            if not price_series.empty
-            else 0,
+            "price_points": int(len(price_rows)),
+            "valuation_days": int(len(metric_dates)),
             "snapshot_points": {
-                "eps_ttm": int(len(eps_ttm)),
-                "sales_ttm": int(len(sales_ttm)),
-                "ebitda_ttm": int(len(ebitda_ttm)),
-                "book_per_share": int(len(book_per_share)),
-                "net_debt_per_share": int(len(net_debt_per_share)),
-                "shares_outstanding": int(len(shares_outstanding)),
+                "eps_ttm": int(eps_ttm.height),
+                "sales_ttm": int(sales_ttm.height),
+                "ebitda_ttm": int(ebitda_ttm.height),
+                "book_per_share": int(book_per_share.height),
+                "net_debt_per_share": int(net_debt_per_share.height),
+                "shares_outstanding": int(shares_outstanding.height),
             },
         },
         "current": {

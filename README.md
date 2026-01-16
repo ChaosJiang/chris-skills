@@ -115,7 +115,21 @@ ln -s "$(pwd)" ~/.opencode/skill/financial-report-analyzer
 - 主入口脚本都在 `scripts/` 中
 - 每个步骤是独立脚本，可单独运行或串联
 
+### Pre-commit
+```bash
+python -m pip install pre-commit
+pre-commit install
+```
+
 示例流程：
+
+```bash
+python scripts/run_report.py --symbol AAPL --years 1 --output output
+```
+
+> `run_report.py` 会自动判断市场（如 `.SH/.SZ/.BJ/.HK/.T`），并默认在 24 小时内复用缓存数据；使用 `--refresh` 可强制更新。
+
+完整逐步执行：
 
 ```bash
 python scripts/fetch_data.py --symbol AAPL --market US --years 1 --output output
@@ -133,6 +147,12 @@ python scripts/report.py --analysis output/AAPL_analysis.json --valuation output
 
 ```bash
 . .venv/bin/activate
+python scripts/run_report.py --symbol AAPL --years 1 --output output
+```
+
+逐步执行：
+
+```bash
 python scripts/fetch_data.py --symbol AAPL --market US --years 1 --output output
 python scripts/analyze.py --input output/AAPL_data.json --output output
 python scripts/valuation.py --input output/AAPL_data.json --analysis output/AAPL_analysis.json --output output
@@ -180,10 +200,9 @@ python scripts/report.py --analysis output/AAPL_analysis.json --valuation output
 
 - [yfinance](https://github.com/ranaroussi/yfinance) - 美股/日股/港股数据
 - [akshare](https://github.com/akfamily/akshare) - A股数据
-- [pandas](https://pandas.pydata.org/) - 数据处理
+- [polars](https://pola.rs/) - 数据处理
 - [matplotlib](https://matplotlib.org/) - 数据可视化
 
 ---
 
 **Made with ❤️ for financial analysis**
-

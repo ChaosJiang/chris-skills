@@ -9,31 +9,28 @@ import os
 from typing import Dict
 
 import matplotlib.pyplot as plt
-import pandas as pd
+
+from series_utils import series_from_mapping, series_rows
 
 
-def series_from_dict(data: Dict[str, float]) -> pd.Series:
-    if not data:
-        return pd.Series(dtype=float)
-    series = pd.Series(data)
-    series.index = pd.to_datetime(series.index, errors="coerce", utc=True).tz_localize(
-        None
-    )
-    series = pd.to_numeric(series, errors="coerce").dropna().sort_index()
-    return series
+def series_from_dict(data: Dict[str, float]):
+    return series_from_mapping(data)
 
 
 def plot_series(
-    series_list: Dict[str, pd.Series], title: str, ylabel: str, output_path: str
+    series_list: Dict[str, object], title: str, ylabel: str, output_path: str
 ) -> None:
     if not series_list:
         return
     plt.figure(figsize=(9, 4.5))
     plotted = False
     for label, series in series_list.items():
-        if series.empty:
+        rows = series_rows(series)
+        if not rows:
             continue
-        plt.plot(series.index, series.values, marker="o", label=label)
+        dates = [row[0] for row in rows]
+        values = [row[1] for row in rows]
+        plt.plot(dates, values, marker="o", label=label)
         plotted = True
     if not plotted:
         plt.close()
@@ -52,16 +49,8 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate charts from analysis JSON")
-    parser.add_argument("--analysis", required=True, help="Path to analysis JSON")
-    parser.add_argument("--output", required=True, help="Output directory for charts")
-    args = parser.parse_args()
-
-    with open(args.analysis, "r", encoding="utf-8") as handle:
-        analysis = json.load(handle)
-
-    ensure_dir(args.output)
+def generate_charts(analysis: Dict[str, Any], output_dir: str) -> None:
+    ensure_dir(output_dir)
 
     revenue = series_from_dict(analysis.get("financials", {}).get("revenue", {}))
     net_income = series_from_dict(analysis.get("financials", {}).get("net_income", {}))
@@ -78,38 +67,50 @@ def main() -> None:
         {"Revenue": revenue, "Net Income": net_income},
         "Revenue & Net Income",
         "Amount",
-        os.path.join(args.output, "revenue_net_income.png"),
+        os.path.join(output_dir, "revenue_net_income.png"),
     )
 
     plot_series(
         {"Gross Margin": gross_margin, "Net Margin": net_margin},
         "Margin Trends",
         "Ratio",
-        os.path.join(args.output, "margin_trends.png"),
+        os.path.join(output_dir, "margin_trends.png"),
     )
 
     plot_series(
         {"ROE": roe, "ROA": roa},
         "ROE & ROA",
         "Ratio",
-        os.path.join(args.output, "roe_roa.png"),
+        os.path.join(output_dir, "roe_roa.png"),
     )
 
     plot_series(
         {"Debt/Equity": debt_to_equity},
         "Debt to Equity",
         "Ratio",
-        os.path.join(args.output, "debt_to_equity.png"),
+        os.path.join(output_dir, "debt_to_equity.png"),
     )
 
     plot_series(
         {"Price": price},
         "Stock Price",
         "Price",
-        os.path.join(args.output, "price_history.png"),
+        os.path.join(output_dir, "price_history.png"),
     )
 
-    print(f"Saved charts to {args.output}")
+    print(f"Saved charts to {output_dir}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate charts from analysis JSON")
+    parser.add_argument("--analysis", required=True, help="Path to analysis JSON")
+    parser.add_argument("--output", required=True, help="Output directory for charts")
+    args = parser.parse_args()
+
+    with open(args.analysis, "r", encoding="utf-8") as handle:
+        analysis = json.load(handle)
+
+    generate_charts(analysis, args.output)
 
 
 if __name__ == "__main__":

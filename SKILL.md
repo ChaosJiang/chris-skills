@@ -63,7 +63,20 @@ export SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SKILL_ROOT/.venv/bin/activate"
 ```
 
-### 2) 数据获取
+### 2) 一键生成（推荐）
+```bash
+python "$SKILL_ROOT/scripts/run_report.py" \
+  --symbol AAPL \
+  --years 1 \
+  --output "$SKILL_ROOT/output"
+```
+
+提示：
+- 自动识别市场（如 `.SH/.SZ/.BJ/.HK/.T`），无需手动指定 `--market`
+- 默认 24 小时内复用缓存数据，可用 `--refresh` 强制拉取最新数据
+- 可用 `--skip-valuation/--skip-analyst/--skip-charts` 加速生成
+
+### 3) 数据获取
 ```bash
 YEARS=${YEARS:-1}
 python "$SKILL_ROOT/scripts/fetch_data.py" \
@@ -77,7 +90,7 @@ python "$SKILL_ROOT/scripts/fetch_data.py" \
 
 提示: 若用户指定年份（如“近 3 年”），设置 `YEARS=3`；未指定则使用默认 1 年。
 
-### 3) 财务分析
+### 4) 财务分析
 ```bash
 python "$SKILL_ROOT/scripts/analyze.py" \
   --input "$SKILL_ROOT/output/AAPL_data.json" \
@@ -86,7 +99,7 @@ python "$SKILL_ROOT/scripts/analyze.py" \
 
 输出: `output/AAPL_analysis.json`
 
-### 4) 估值与分析师预期
+### 5) 估值与分析师预期
 ```bash
 python "$SKILL_ROOT/scripts/valuation.py" \
   --input "$SKILL_ROOT/output/AAPL_data.json" \
@@ -100,14 +113,14 @@ python "$SKILL_ROOT/scripts/analyst.py" \
 
 输出: `output/AAPL_valuation.json` / `output/AAPL_analyst.json`
 
-### 5) 生成图表
+### 6) 生成图表
 ```bash
 python "$SKILL_ROOT/scripts/visualize.py" \
   --analysis "$SKILL_ROOT/output/AAPL_analysis.json" \
   --output "$SKILL_ROOT/output/AAPL_charts"
 ```
 
-### 6) 生成报告
+### 7) 生成报告
 ```bash
 python "$SKILL_ROOT/scripts/report.py" \
   --analysis "$SKILL_ROOT/output/AAPL_analysis.json" \

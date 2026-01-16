@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 import numpy as np
-import polars as pl
 import yfinance as yf
 import akshare as ak
 
@@ -19,14 +18,39 @@ def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
 
 
-def df_to_dict(df: pd.DataFrame | None) -> Dict[str, Dict[str, Any]]:
-    if df is None or df.empty:
+def infer_market(symbol: str) -> str:
+    upper_symbol = symbol.upper()
+    if upper_symbol.endswith((".SH", ".SZ", ".BJ")):
+        return "CN"
+    if upper_symbol.endswith(".HK"):
+        return "HK"
+    if upper_symbol.endswith(".T"):
+        return "JP"
+    return "US"
+
+
+def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
+    if df is None or getattr(df, "empty", False):
         return {}
-    sanitized = df.copy()
-    sanitized.columns = [str(col) for col in sanitized.columns]
-    sanitized.index = [str(idx) for idx in sanitized.index]
-    sanitized = sanitized.replace({np.nan: None})
-    return sanitized.to_dict()
+    try:
+        sanitized = df.copy()
+    except Exception:
+        return {}
+    try:
+        if hasattr(sanitized, "columns"):
+            sanitized.columns = [str(col) for col in sanitized.columns]
+        if hasattr(sanitized, "index"):
+            sanitized.index = [str(idx) for idx in sanitized.index]
+        if hasattr(sanitized, "replace"):
+            sanitized = sanitized.replace({np.nan: None})
+    except Exception:
+        pass
+    if hasattr(sanitized, "to_dict"):
+        try:
+            return sanitized.to_dict()
+        except Exception:
+            return {}
+    return {}
 
 
 def get_ticker_info(ticker: yf.Ticker) -> Dict[str, Any]:
@@ -39,54 +63,54 @@ def get_ticker_info(ticker: yf.Ticker) -> Dict[str, Any]:
             return {}
 
 
-def get_income_statement(ticker: yf.Ticker) -> pd.DataFrame:
+def get_income_statement(ticker: yf.Ticker) -> Any:
     if hasattr(ticker, "income_stmt"):
         return ticker.income_stmt
     if hasattr(ticker, "financials"):
         return ticker.financials
-    return pd.DataFrame()
+    return {}
 
 
-def get_balance_sheet(ticker: yf.Ticker) -> pd.DataFrame:
+def get_balance_sheet(ticker: yf.Ticker) -> Any:
     if hasattr(ticker, "balance_sheet"):
         return ticker.balance_sheet
     if hasattr(ticker, "balancesheet"):
         return ticker.balancesheet
-    return pd.DataFrame()
+    return {}
 
 
-def get_cashflow(ticker: yf.Ticker) -> pd.DataFrame:
+def get_cashflow(ticker: yf.Ticker) -> Any:
     if hasattr(ticker, "cashflow"):
         return ticker.cashflow
     if hasattr(ticker, "cash_flow"):
         return ticker.cash_flow
-    return pd.DataFrame()
+    return {}
 
 
-def get_quarterly_income_statement(ticker: yf.Ticker) -> pd.DataFrame:
+def get_quarterly_income_statement(ticker: yf.Ticker) -> Any:
     if hasattr(ticker, "quarterly_income_stmt"):
         return ticker.quarterly_income_stmt
     if hasattr(ticker, "quarterly_incomestmt"):
         return ticker.quarterly_incomestmt
     if hasattr(ticker, "quarterly_financials"):
         return ticker.quarterly_financials
-    return pd.DataFrame()
+    return {}
 
 
-def get_quarterly_balance_sheet(ticker: yf.Ticker) -> pd.DataFrame:
+def get_quarterly_balance_sheet(ticker: yf.Ticker) -> Any:
     if hasattr(ticker, "quarterly_balance_sheet"):
         return ticker.quarterly_balance_sheet
     if hasattr(ticker, "quarterly_balancesheet"):
         return ticker.quarterly_balancesheet
-    return pd.DataFrame()
+    return {}
 
 
-def get_quarterly_cashflow(ticker: yf.Ticker) -> pd.DataFrame:
+def get_quarterly_cashflow(ticker: yf.Ticker) -> Any:
     if hasattr(ticker, "quarterly_cash_flow"):
         return ticker.quarterly_cash_flow
     if hasattr(ticker, "quarterly_cashflow"):
         return ticker.quarterly_cashflow
-    return pd.DataFrame()
+    return {}
 
 
 def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
@@ -110,15 +134,9 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
         },
         "price_history": df_to_dict(history),
         "analyst": {
-            "recommendations": df_to_dict(recommendations)
-            if isinstance(recommendations, pd.DataFrame)
-            else {},
-            "recommendations_summary": df_to_dict(recommendations_summary)
-            if isinstance(recommendations_summary, pd.DataFrame)
-            else {},
-            "price_target": df_to_dict(analyst_price_target)
-            if isinstance(analyst_price_target, pd.DataFrame)
-            else {},
+            "recommendations": df_to_dict(recommendations),
+            "recommendations_summary": df_to_dict(recommendations_summary),
+            "price_target": df_to_dict(analyst_price_target),
         },
     }
 
@@ -160,7 +178,7 @@ def fetch_data(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch financial data for analysis")
     parser.add_argument("--symbol", required=True, help="Stock symbol")
-    parser.add_argument("--market", required=True, choices=["US", "CN", "HK", "JP"])
+    parser.add_argument("--market", choices=["US", "CN", "HK", "JP"])
     parser.add_argument("--years", type=int, default=1)
     parser.add_argument(
         "--price-years",
@@ -175,7 +193,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     symbol = normalize_symbol(args.symbol)
-    market = args.market.upper()
+    market = (args.market or infer_market(symbol)).upper()
 
     price_years = args.price_years
     if price_years is None:

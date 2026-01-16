@@ -8,18 +8,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-import pandas as pd
+from series_utils import series_from_mapping, series_rows
 
 
-def series_from_dict(data: Dict[str, float]) -> pd.Series:
-    if not data:
-        return pd.Series(dtype=float)
-    series = pd.Series(data)
-    series.index = pd.to_datetime(series.index, errors="coerce", utc=True).tz_localize(
-        None
-    )
-    series = pd.to_numeric(series, errors="coerce").dropna().sort_index()
-    return series
+def series_from_dict(data: Dict[str, float]):
+    return series_from_mapping(data)
+
+
+def series_to_map(series) -> Dict[Any, float]:
+    return {dt: value for dt, value in series_rows(series)}
 
 
 def format_number(value: Any) -> str:
@@ -49,11 +46,12 @@ def build_financial_table(analysis: Dict[str, Any]) -> str:
         analysis.get("financials", {}).get("free_cash_flow", {})
     )
 
-    base_series = revenue if not revenue.empty else net_income
-    if base_series.empty:
+    base_series = revenue if revenue.height > 0 else net_income
+    if base_series.height == 0:
         return "数据不足，无法生成财务对比表。"
 
-    dates = list(base_series.index[-5:])
+    base_rows = series_rows(base_series)
+    dates = [row[0] for row in base_rows][-5:]
     headers = [date.strftime("%Y-%m-%d") for date in dates]
 
     rows = [
@@ -71,12 +69,13 @@ def build_financial_table(analysis: Dict[str, Any]) -> str:
         "| --- | " + " | ".join(["---"] * len(headers)) + " |",
     ]
     for label, series in rows:
-        if series.empty:
+        if series.height == 0:
             values = ["-"] * len(headers)
         else:
+            series_map = series_to_map(series)
             values = []
             for date in dates:
-                value = series.get(date)
+                value = series_map.get(date)
                 if label.endswith("Margin") or label in {"ROE", "ROA"}:
                     values.append(format_percent(value) if value is not None else "-")
                 else:
@@ -168,11 +167,13 @@ def build_report(
 ) -> str:
     company = analysis.get("company", {})
     symbol = analysis.get("symbol")
+    data_fetched_at = analysis.get("data_fetched_at")
 
     report_lines: list[str] = [
         f"# 财报分析报告 - {company.get('name') or symbol}",
         "",
         f"生成时间: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+        f"数据更新时间: {data_fetched_at or '-'}",
         "",
         "## 一、公司概况",
         f"- 公司名称: {company.get('name') or '-'}",

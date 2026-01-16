@@ -6,9 +6,19 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Tuple, List
 
-import pandas as pd
+import polars as pl
+
+from series_utils import (
+    empty_series,
+    latest_value,
+    rows_from_payload,
+    series_from_mapping,
+    series_from_rows,
+    series_rows,
+    series_to_dict,
+)
 
 
 ROW_MAP = {
@@ -60,131 +70,144 @@ def normalize_label(value: str) -> str:
     return "".join(ch.lower() for ch in value if ch.isalnum())
 
 
-def df_from_dict(payload: Dict[str, Any]) -> pd.DataFrame:
-    if not payload:
-        return pd.DataFrame()
-    df = pd.DataFrame(payload)
-    df.index = [str(idx) for idx in df.index]
-    return df
-
-
-def orient_statement(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    if "报告日期" in df.columns:
-        df = df.set_index("报告日期").T
-    return df
-
-
-def extract_row(df: pd.DataFrame, candidates: Iterable[str]) -> pd.Series:
-    if df.empty:
-        return pd.Series(dtype=float)
-    normalized_index = {normalize_label(idx): idx for idx in df.index}
+def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
+    lookup = {normalize_label(str(key)): str(key) for key in keys}
     for candidate in candidates:
-        key = normalize_label(candidate)
-        if key in normalized_index:
-            return df.loc[normalized_index[key]]
-    return pd.Series(dtype=float)
+        normalized = normalize_label(candidate)
+        if normalized in lookup:
+            return lookup[normalized]
+    return None
 
 
-def to_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(series, errors="coerce")
+def find_matching_row_key(
+    statement: Dict[str, Any], candidates: Iterable[str]
+) -> Optional[str]:
+    lookup: Dict[str, str] = {}
+    for row_map in statement.values():
+        if not isinstance(row_map, dict):
+            continue
+        for key in row_map.keys():
+            normalized = normalize_label(str(key))
+            lookup.setdefault(normalized, str(key))
+    for candidate in candidates:
+        normalized = normalize_label(candidate)
+        if normalized in lookup:
+            return lookup[normalized]
+    return None
 
 
-def sort_series(series: pd.Series) -> pd.Series:
-    if series.empty:
-        return pd.Series(dtype=float)
-    index = pd.to_datetime(series.index, errors="coerce", utc=True)
-    index = index.tz_localize(None)
-    if index.notna().sum() >= 2:
-        series = series.copy()
-        series.index = index
-        series = series.sort_index()
-    return series
+def extract_row(
+    statement: Dict[str, Dict[str, Any]], candidates: Iterable[str]
+) -> pl.DataFrame:
+    if not statement:
+        return empty_series()
+    if "报告日期" in statement:
+        metric_key = find_matching_key(
+            [key for key in statement.keys() if key != "报告日期"], candidates
+        )
+        if not metric_key:
+            return empty_series()
+        rows = rows_from_payload(statement, "报告日期")
+        return series_from_rows(rows, "报告日期", metric_key)
+
+    metric_key = find_matching_row_key(statement, candidates)
+    if not metric_key:
+        return empty_series()
+    mapping = {}
+    for date_key, row_map in statement.items():
+        if isinstance(row_map, dict):
+            mapping[str(date_key)] = row_map.get(metric_key)
+    return series_from_mapping(mapping)
 
 
-def series_to_dict(series: pd.Series) -> Dict[str, Any]:
-    ordered = to_numeric(sort_series(series)).dropna()
-    if ordered.empty:
+def series_values(series: pl.DataFrame) -> Tuple[List[datetime], List[float]]:
+    rows = series_rows(series)
+    dates = [row[0] for row in rows]
+    values = [row[1] for row in rows]
+    return dates, values
+
+
+def compute_yoy(series: pl.DataFrame) -> Dict[str, Any]:
+    dates, values = series_values(series)
+    if len(values) < 2:
         return {}
-    return {
-        str(idx.date() if hasattr(idx, "date") else idx): float(val)
-        for idx, val in ordered.items()
-    }
+    result: Dict[str, Any] = {}
+    for idx in range(1, len(values)):
+        previous = values[idx - 1]
+        if previous == 0:
+            continue
+        result[dates[idx].date().isoformat()] = float(values[idx] / previous - 1)
+    return result
 
 
-def compute_yoy(series: pd.Series) -> Dict[str, Any]:
-    ordered = to_numeric(sort_series(series)).dropna()
-    if ordered.empty:
-        return {}
-    yoy = ordered.pct_change().dropna()
-    return {
-        str(idx.date() if hasattr(idx, "date") else idx): float(val)
-        for idx, val in yoy.items()
-    }
-
-
-def compute_cagr(series: pd.Series) -> Optional[float]:
-    ordered = to_numeric(sort_series(series)).dropna()
-    if len(ordered) < 2:
+def compute_cagr(series: pl.DataFrame) -> Optional[float]:
+    dates, values = series_values(series)
+    if len(values) < 2:
         return None
-    start = float(ordered.iloc[0])
-    end = float(ordered.iloc[-1])
+    start = float(values[0])
+    end = float(values[-1])
     if start == 0:
         return None
-    years = max(len(ordered) - 1, 1)
+    years = max(len(values) - 1, 1)
     return float((end / start) ** (1 / years) - 1)
 
 
-def compute_ttm_sum(series: pd.Series) -> pd.Series:
-    ordered = to_numeric(sort_series(series)).dropna()
-    if len(ordered) < 4:
-        return pd.Series(dtype=float)
-    return ordered.rolling(window=4).sum().dropna()
+def compute_ttm_sum(series: pl.DataFrame) -> pl.DataFrame:
+    dates, values = series_values(series)
+    if len(values) < 4:
+        return empty_series()
+    rows = []
+    for idx in range(3, len(values)):
+        rows.append((dates[idx], sum(values[idx - 3 : idx + 1])))
+    return pl.DataFrame(rows, schema=["date", "value"], orient="row")
 
 
-def compute_per_share(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
-    numerator_series = to_numeric(sort_series(numerator)).dropna()
-    denominator_series = to_numeric(sort_series(denominator)).dropna()
-    if numerator_series.empty or denominator_series.empty:
-        return pd.Series(dtype=float)
-    aligned_num, aligned_den = numerator_series.align(denominator_series, join="inner")
-    if aligned_num.empty or aligned_den.empty:
-        return pd.Series(dtype=float)
-    per_share = aligned_num / aligned_den
-    per_share = per_share.replace([float("inf"), float("-inf")], pd.NA).dropna()
-    return per_share
+def align_on_date(
+    left: pl.DataFrame, right: pl.DataFrame, left_name: str, right_name: str
+) -> pl.DataFrame:
+    if left.height == 0 or right.height == 0:
+        return pl.DataFrame()
+    left_df = left.rename({"value": left_name})
+    right_df = right.rename({"value": right_name})
+    return left_df.join(right_df, on="date", how="inner")
 
 
-def compute_average_balance(series: pd.Series) -> pd.Series:
-    ordered = to_numeric(sort_series(series)).dropna()
-    if len(ordered) < 2:
-        return pd.Series(dtype=float)
-    return ordered.rolling(window=2).mean().dropna()
+def divide_series(numerator: pl.DataFrame, denominator: pl.DataFrame) -> pl.DataFrame:
+    aligned = align_on_date(numerator, denominator, "num", "den")
+    if aligned.height == 0:
+        return empty_series()
+    aligned = aligned.filter(pl.col("den") != 0)
+    if aligned.height == 0:
+        return empty_series()
+    result = aligned.with_columns((pl.col("num") / pl.col("den")).alias("value"))
+    return result.select(["date", "value"]).filter(pl.col("value").is_finite())
+
+
+def compute_per_share(numerator: pl.DataFrame, denominator: pl.DataFrame) -> pl.DataFrame:
+    return divide_series(numerator, denominator)
+
+
+def compute_average_balance(series: pl.DataFrame) -> pl.DataFrame:
+    dates, values = series_values(series)
+    if len(values) < 2:
+        return empty_series()
+    rows = []
+    for idx in range(1, len(values)):
+        rows.append((dates[idx], (values[idx - 1] + values[idx]) / 2))
+    return pl.DataFrame(rows, schema=["date", "value"], orient="row")
 
 
 def compute_ttm_ratio(
-    numerator_ttm: pd.Series, denominator_avg: pd.Series
-) -> pd.Series:
-    numerator = to_numeric(sort_series(numerator_ttm)).dropna()
-    denominator = to_numeric(sort_series(denominator_avg)).dropna()
-    if numerator.empty or denominator.empty:
-        return pd.Series(dtype=float)
-    aligned_num, aligned_den = numerator.align(denominator, join="inner")
-    if aligned_num.empty or aligned_den.empty:
-        return pd.Series(dtype=float)
-    ratios = aligned_num / aligned_den
-    ratios = ratios.replace([float("inf"), float("-inf")], pd.NA).dropna()
-    return ratios
+    numerator_ttm: pl.DataFrame, denominator_avg: pl.DataFrame
+) -> pl.DataFrame:
+    return divide_series(numerator_ttm, denominator_avg)
 
 
 def extract_quarterly_metrics(
-    income: pd.DataFrame, balance: pd.DataFrame, cashflow: pd.DataFrame
-) -> Dict[str, pd.Series]:
-    income = orient_statement(income)
-    balance = orient_statement(balance)
-    cashflow = orient_statement(cashflow)
-
+    income: Dict[str, Dict[str, Any]],
+    balance: Dict[str, Dict[str, Any]],
+    cashflow: Dict[str, Dict[str, Any]],
+) -> Dict[str, pl.DataFrame]:
     return {
         "revenue": extract_row(income, ROW_MAP["revenue"]),
         "net_income": extract_row(income, ROW_MAP["net_income"]),
@@ -205,12 +228,10 @@ def extract_quarterly_metrics(
 
 
 def extract_metrics(
-    income: pd.DataFrame, balance: pd.DataFrame, cashflow: pd.DataFrame
-) -> Dict[str, pd.Series]:
-    income = orient_statement(income)
-    balance = orient_statement(balance)
-    cashflow = orient_statement(cashflow)
-
+    income: Dict[str, Dict[str, Any]],
+    balance: Dict[str, Dict[str, Any]],
+    cashflow: Dict[str, Dict[str, Any]],
+) -> Dict[str, pl.DataFrame]:
     return {
         "revenue": extract_row(income, ROW_MAP["revenue"]),
         "net_income": extract_row(income, ROW_MAP["net_income"]),
@@ -225,7 +246,7 @@ def extract_metrics(
 
 
 def compute_ratios(
-    metrics: Dict[str, pd.Series],
+    metrics: Dict[str, pl.DataFrame],
 ) -> Dict[str, Dict[str, Any]]:
     revenue = metrics["revenue"]
     net_income = metrics["net_income"]
@@ -235,61 +256,63 @@ def compute_ratios(
     total_liabilities = metrics["total_liabilities"]
 
     ratios = {
-        "gross_margin": series_to_dict(gross_profit / revenue)
-        if not gross_profit.empty and not revenue.empty
-        else {},
-        "net_margin": series_to_dict(net_income / revenue)
-        if not net_income.empty and not revenue.empty
-        else {},
-        "roe": series_to_dict(net_income / total_equity)
-        if not net_income.empty and not total_equity.empty
-        else {},
-        "roa": series_to_dict(net_income / total_assets)
-        if not net_income.empty and not total_assets.empty
-        else {},
-        "debt_to_equity": series_to_dict(total_liabilities / total_equity)
-        if not total_liabilities.empty and not total_equity.empty
-        else {},
+        "gross_margin": series_to_dict(divide_series(gross_profit, revenue)),
+        "net_margin": series_to_dict(divide_series(net_income, revenue)),
+        "roe": series_to_dict(divide_series(net_income, total_equity)),
+        "roa": series_to_dict(divide_series(net_income, total_assets)),
+        "debt_to_equity": series_to_dict(divide_series(total_liabilities, total_equity)),
     }
     return ratios
 
 
-def extract_price_series(price_df: pd.DataFrame) -> pd.Series:
-    if price_df.empty:
-        return pd.Series(dtype=float)
-    for candidate in ["Close", "Adj Close", "收盘", "close", "close_price"]:
-        if candidate in price_df.columns:
-            series = price_df[candidate]
-            series.index = price_df.index
-            return to_numeric(series)
-    return pd.Series(dtype=float)
+def extract_price_series(price_payload: Dict[str, Dict[str, Any]]) -> pl.DataFrame:
+    if not price_payload:
+        return empty_series()
+    date_key = next(
+        (key for key in ["日期", "date", "Date"] if key in price_payload), None
+    )
+    candidates = ["Close", "Adj Close", "收盘", "close", "close_price"]
+    if date_key:
+        value_key = find_matching_key(
+            [key for key in price_payload.keys() if key != date_key], candidates
+        )
+        if not value_key:
+            return empty_series()
+        rows = rows_from_payload(price_payload, date_key)
+        return series_from_rows(rows, date_key, value_key)
+
+    for candidate in candidates:
+        column_map = price_payload.get(candidate)
+        if isinstance(column_map, dict):
+            return series_from_mapping(column_map)
+    return empty_series()
 
 
 def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
     info = payload.get("info", {}) or {}
 
-    income = df_from_dict(payload.get("financials", {}).get("income_statement", {}))
-    balance = df_from_dict(payload.get("financials", {}).get("balance_sheet", {}))
-    cashflow = df_from_dict(payload.get("financials", {}).get("cashflow", {}))
+    income = payload.get("financials", {}).get("income_statement", {}) or {}
+    balance = payload.get("financials", {}).get("balance_sheet", {}) or {}
+    cashflow = payload.get("financials", {}).get("cashflow", {}) or {}
 
-    quarterly_income = df_from_dict(
-        payload.get("financials_quarterly", {}).get("income_statement", {})
+    quarterly_income = (
+        payload.get("financials_quarterly", {}).get("income_statement", {}) or {}
     )
-    quarterly_balance = df_from_dict(
-        payload.get("financials_quarterly", {}).get("balance_sheet", {})
+    quarterly_balance = (
+        payload.get("financials_quarterly", {}).get("balance_sheet", {}) or {}
     )
-    quarterly_cashflow = df_from_dict(
-        payload.get("financials_quarterly", {}).get("cashflow", {})
+    quarterly_cashflow = (
+        payload.get("financials_quarterly", {}).get("cashflow", {}) or {}
     )
 
-    price_df = df_from_dict(payload.get("price_history", {}))
+    price_payload = payload.get("price_history", {}) or {}
 
     metrics = extract_metrics(income, balance, cashflow)
     quarterly_metrics = extract_quarterly_metrics(
         quarterly_income, quarterly_balance, quarterly_cashflow
     )
 
-    price_series = extract_price_series(price_df)
+    price_series = extract_price_series(price_payload)
 
     revenue_q = quarterly_metrics["revenue"]
     net_income_q = quarterly_metrics["net_income"]
@@ -332,6 +355,7 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
     analysis = {
         "symbol": payload.get("symbol"),
         "market": payload.get("market"),
+        "data_fetched_at": payload.get("fetched_at"),
         "company": {
             "name": info.get("longName") or info.get("shortName"),
             "sector": info.get("sector"),
@@ -387,9 +411,7 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "price": {
             "history": series_to_dict(price_series),
-            "latest": float(price_series.dropna().iloc[-1])
-            if not price_series.dropna().empty
-            else None,
+            "latest": latest_value(price_series),
         },
     }
 

@@ -7,8 +7,9 @@ import argparse
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+import math
 
-import pandas as pd
+from series_utils import parse_datetime
 
 
 BUY_KEYWORDS = {"buy", "strong buy", "overweight", "outperform", "add"}
@@ -28,44 +29,63 @@ def grade_bucket(grade: str) -> str:
 
 
 def summarize_recommendations(recommendations: Dict[str, Any]) -> Dict[str, int]:
-    if not recommendations:
+    if not recommendations or not isinstance(recommendations, dict):
         return {}
-    df = pd.DataFrame(recommendations)
-    if df.empty:
+    grades = recommendations.get("To Grade", {})
+    if not isinstance(grades, dict) or not grades:
         return {}
-    df.index = pd.to_datetime(
-        df.index, errors="coerce", utc=True, format="mixed"
-    ).tz_localize(None)
+    rows = []
+    for date_key, grade in grades.items():
+        parsed = parse_datetime(date_key)
+        if parsed is None:
+            continue
+        rows.append((parsed, str(grade)))
+    if not rows:
+        return {}
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=90)
-    recent = df[df.index >= cutoff]
-    if recent.empty:
-        recent = df
+    recent = [row for row in rows if row[0] >= cutoff]
+    if not recent:
+        recent = rows
     buckets = {"buy": 0, "hold": 0, "sell": 0, "other": 0}
-    for grade in recent.get("To Grade", []):
-        bucket = grade_bucket(str(grade))
+    for _, grade in recent:
+        bucket = grade_bucket(grade)
         buckets[bucket] += 1
     return {key: value for key, value in buckets.items() if value > 0}
 
 
 def normalize_summary_value(value: Any) -> Any:
-    if pd.isna(value):
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
         return None
     if isinstance(value, (int, float)):
         return float(value)
-    numeric = pd.to_numeric(value, errors="coerce")
-    if pd.notna(numeric):
-        return float(numeric)
+    if isinstance(value, str):
+        cleaned = value.replace(",", "").strip()
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return str(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
     return str(value)
 
 
 def summarize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
-    if not summary:
+    if not summary or not isinstance(summary, dict):
         return {}
-    df = pd.DataFrame(summary)
-    if df.empty:
-        return {}
-    latest = df.iloc[0].to_dict()
-    return {key: normalize_summary_value(value) for key, value in latest.items()}
+    latest: Dict[str, Any] = {}
+    for key, column_map in summary.items():
+        if isinstance(column_map, dict) and column_map:
+            value = next(iter(column_map.values()))
+        else:
+            value = column_map
+        latest[key] = normalize_summary_value(value)
+    return latest
 
 
 def build_analyst_report(data: Dict[str, Any]) -> Dict[str, Any]:
