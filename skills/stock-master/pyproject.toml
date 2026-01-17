@@ -1,0 +1,52 @@
+[project]
+name = "financial-report-analyzer"
+version = "0.0.1"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.1.0",
+  "mypy>=1.8.0",
+  "pandas-stubs>=2.1.0",
+  "pre-commit>=3.6.0",
+]
+
+[tool.mypy]
+pretty = true
+show_error_codes = true
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+  # isort
+  "I",
+  # bugbear rules
+  "B",
+  # remove unused imports
+  "F401",
+  # check for missing future annotations
+  "FA102",
+  # bare except statements
+  "E722",
+  # unused arguments
+  "ARG",
+  # print statements
+  "T201",
+  "T203",
+  # misuse of typing.TYPE_CHECKING
+  "TC004",
+  # import rules
+  "TID251",
+]
+ignore = [
+  # mutable defaults
+  "B006",
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+extra-standard-library = ["typing_extensions"]
+
