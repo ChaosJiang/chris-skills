@@ -1,4 +1,30 @@
-## 详细步骤操作
+# 高级用法
+
+## 推荐方式
+
+始终使用 `run_report.py` 作为主入口：
+
+```bash
+scripts/.venv/bin/python scripts/run_report.py --symbol AAPL --output output
+```
+
+输出结构：
+```
+output/AAPL_US/
+├── report.md
+├── data.json
+├── analysis.json
+├── valuation.json
+├── analyst.json
+└── charts/
+    └── *.png
+```
+
+---
+
+## 调试用途：分步执行
+
+以下命令仅用于开发调试，输出路径与主入口不同。
 
 ### 1) 数据获取
 
@@ -10,10 +36,6 @@ scripts/.venv/bin/python scripts/fetch_data.py \
   --output output
 ```
 
-输出: `output/AAPL_data.json`
-
-提示: 若用户指定年份（如“近 3 年”），设置 `YEARS=3`；未指定则使用默认 1 年。
-
 ### 2) 财务分析
 
 ```bash
@@ -21,8 +43,6 @@ scripts/.venv/bin/python scripts/analyze.py \
   --input output/AAPL_data.json \
   --output output
 ```
-
-输出: `output/AAPL_analysis.json`
 
 ### 3) 估值与分析师预期
 
@@ -36,8 +56,6 @@ scripts/.venv/bin/python scripts/analyst.py \
   --input output/AAPL_data.json \
   --output output
 ```
-
-输出: `output/AAPL_valuation.json` / `output/AAPL_analyst.json`
 
 ### 4) 生成图表
 
@@ -57,21 +75,24 @@ scripts/.venv/bin/python scripts/report.py \
   --output output
 ```
 
-输出: `output/AAPL_report.md`
+---
 
-## 输出报告结构
+## 报告结构
 
-- 公司概况
-- 业务模式分析
-- 竞争格局
-- 财务分析与历史对比
-- 估值深度分析
-- 分析师预期
-- 图表与结论
-- 投资建议 (基本面优先)
+1. 公司概况
+2. 业务模式分析
+3. 竞争格局
+4. 财务分析与历史对比
+5. 估值深度分析
+6. 分析师预期
+7. 图表
+8. 投资建议
 
 ## 数据源
 
-- 美股/港股/日股: yfinance
-- A股: AkShare
-- 可选付费 API: Alpha Vantage / FMP / Tushare Pro
+| 市场 | 数据源 |
+|------|--------|
+| 美股/港股/日股 | yfinance |
+| A股 | AkShare |
+
+可选付费 API: Alpha Vantage / FMP / Tushare Pro
