@@ -133,15 +133,18 @@ def main() -> None:
     try:
         symbol = fetch_data_module.normalize_symbol(args.symbol)
         market = (args.market or fetch_data_module.infer_market(symbol)).upper()
-        output_dir = Path(args.output)
+        base_output_dir = Path(args.output)
 
         safe_symbol = symbol.replace(".", "_")
-        data_path = output_dir / f"{safe_symbol}_data.json"
-        analysis_path = output_dir / f"{safe_symbol}_analysis.json"
-        valuation_path = output_dir / f"{safe_symbol}_valuation.json"
-        analyst_path = output_dir / f"{safe_symbol}_analyst.json"
-        report_path = output_dir / f"{safe_symbol}_report.md"
-        charts_dir = output_dir / f"{safe_symbol}_charts"
+        company_folder = f"{safe_symbol}_{market}"
+        output_dir = base_output_dir / company_folder
+
+        data_path = output_dir / "data.json"
+        analysis_path = output_dir / "analysis.json"
+        valuation_path = output_dir / "valuation.json"
+        analyst_path = output_dir / "analyst.json"
+        report_path = output_dir / "report.md"
+        charts_dir = output_dir / "charts"
 
         price_years = args.price_years
         if price_years is None:

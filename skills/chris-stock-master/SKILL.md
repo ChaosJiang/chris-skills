@@ -10,8 +10,9 @@ description: 分析上市公司财报（美/日/港/A股），生成估值分析
 ## 触发条件
 
 当用户请求以下内容时使用此 Skill：
-- "分析 AAPL" / "分析苹果公司"
-- "看看腾讯的财报" / "分析 0700.HK"
+
+- "分析美股AAPL"/ "分析苹果公司"
+- "看看港股腾讯的财报" / "分析 0700.HK"
 - "茅台估值如何" / "分析 600519.SH"
 - 任何关于股票财报、估值、财务分析的请求
 
@@ -63,19 +64,28 @@ cat output/<SYMBOL>_report.md
 
 ## 输出文件
 
+每个公司的文件放在独立文件夹中：`output/<SYMBOL>_<MARKET>/`
+
 ```
 output/
-├── <SYMBOL>_report.md      # 主报告（呈现给用户）
-├── <SYMBOL>_data.json      # 原始数据
-├── <SYMBOL>_analysis.json  # 分析结果
-├── <SYMBOL>_valuation.json # 估值数据
-├── <SYMBOL>_analyst.json   # 分析师预期
-└── <SYMBOL>_charts/        # 图表
+└── AAPL_US/                # 公司文件夹（代码_市场）
+    ├── report.md           # 主报告（呈现给用户）
+    ├── data.json           # 原始数据
+    ├── analysis.json       # 分析结果
+    ├── valuation.json      # 估值数据
+    ├── analyst.json        # 分析师预期
+    └── charts/             # 图表目录
+        ├── revenue_net_income.png
+        ├── margin_trends.png
+        ├── roe_roa.png
+        ├── debt_to_equity.png
+        └── price_history.png
 ```
 
 ## 呈现指南
 
 向用户呈现结果时：
+
 1. 先展示公司基本信息和最新股价
 2. 重点呈现估值分析（P/E 分位数、与同行对比）
 3. 展示关键财务指标趋势
