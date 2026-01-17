@@ -12,6 +12,7 @@ from logging_config import DataQualityLogger, get_module_logger
 from series_utils import (
     empty_series,
     latest_value,
+    parse_datetime,
     rows_from_payload,
     series_from_mapping,
     series_from_rows,
@@ -41,6 +42,14 @@ ROW_MAP = {
         "营业收益",
     ],
     "ebitda": ["EBITDA", "Normalized EBITDA"],
+    "research_and_development": [
+        "Research And Development",
+        "Research Development",
+        "Research Development Expense",
+        "Research & Development",
+        "研发费用",
+        "研发支出",
+    ],
     "total_assets": ["Total Assets", "资产总计"],
     "total_liabilities": [
         "Total Liabilities",
@@ -89,16 +98,17 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> str | N
         Matched key or None
     """
     keys_list = list(keys)
+    candidates_list = list(candidates)
 
     # Step 1: Try exact match (case-sensitive)
-    for candidate in candidates:
+    for candidate in candidates_list:
         if candidate in keys_list:
             logger.debug(f"Exact match found: {candidate}")
             return candidate
 
     # Step 2: Try case-insensitive exact match
     case_insensitive_lookup = {str(key).lower(): str(key) for key in keys_list}
-    for candidate in candidates:
+    for candidate in candidates_list:
         candidate_lower = str(candidate).lower()
         if candidate_lower in case_insensitive_lookup:
             matched = case_insensitive_lookup[candidate_lower]
@@ -107,7 +117,7 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> str | N
 
     # Step 3: Try fuzzy match (normalized) with warning
     normalized_lookup = {normalize_label(str(key)): str(key) for key in keys_list}
-    for candidate in candidates:
+    for candidate in candidates_list:
         normalized = normalize_label(candidate)
         if normalized in normalized_lookup:
             matched = normalized_lookup[normalized]
@@ -123,12 +133,12 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> str | N
             return matched
 
     # No match found
-    if data_quality_logger:
+    if data_quality_logger and candidates_list:
         data_quality_logger.log_missing_field(
-            field=str(candidates[0]) if candidates else "unknown",
+            field=str(candidates_list[0]),
             context=f"Available keys: {', '.join(map(str, keys_list[:5]))}",
         )
-    logger.debug(f"No match found for candidates: {list(candidates)[:3]}")
+    logger.debug(f"No match found for candidates: {candidates_list[:3]}")
     return None
 
 
@@ -208,6 +218,60 @@ def compute_yoy(series: pl.DataFrame) -> dict[str, Any]:
     return result
 
 
+def compute_quarterly_yoy(series: pl.DataFrame) -> dict[str, Any]:
+    dates, values = series_values(series)
+    if len(values) < 5:
+        return {}
+    result: dict[str, Any] = {}
+    for idx in range(4, len(values)):
+        previous = values[idx - 4]
+        if previous == 0:
+            continue
+        result[dates[idx].date().isoformat()] = float(values[idx] / previous - 1)
+    return result
+
+
+def compute_growth_from_latest(series: pl.DataFrame) -> float | None:
+    values = [row[1] for row in series_rows(series)]
+    if len(values) < 2:
+        return None
+    latest = values[-1]
+    previous = values[-2]
+    if previous == 0:
+        return None
+    return float(latest / previous - 1)
+
+
+def compute_growth_from_previous_year(series: pl.DataFrame) -> float | None:
+    values = [row[1] for row in series_rows(series)]
+    if len(values) < 5:
+        return None
+    latest = values[-1]
+    previous = values[-5]
+    if previous == 0:
+        return None
+    return float(latest / previous - 1)
+
+
+def parse_financial_currency(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().upper()
+        return cleaned if cleaned else None
+    return None
+
+
+def parse_latest_quarter_date(series_map: dict[str, Any]) -> str | None:
+    if not series_map:
+        return None
+    for date_key in reversed(list(series_map.keys())):
+        parsed = parse_datetime(date_key)
+        if parsed is not None:
+            return parsed.date().isoformat()
+    return None
+
+
 def compute_cagr(series: pl.DataFrame) -> float | None:
     _, values = series_values(series)
     if len(values) < 2:
@@ -284,6 +348,9 @@ def extract_quarterly_metrics(
         "gross_profit": extract_row(income, ROW_MAP["gross_profit"]),
         "operating_income": extract_row(income, ROW_MAP["operating_income"]),
         "ebitda": extract_row(income, ROW_MAP["ebitda"]),
+        "research_and_development": extract_row(
+            income, ROW_MAP["research_and_development"]
+        ),
         "diluted_avg_shares": extract_row(income, ROW_MAP["diluted_avg_shares"]),
         "basic_avg_shares": extract_row(income, ROW_MAP["basic_avg_shares"]),
         "total_assets": extract_row(balance, ROW_MAP["total_assets"]),
@@ -308,6 +375,9 @@ def extract_metrics(
         "gross_profit": extract_row(income, ROW_MAP["gross_profit"]),
         "operating_income": extract_row(income, ROW_MAP["operating_income"]),
         "ebitda": extract_row(income, ROW_MAP["ebitda"]),
+        "research_and_development": extract_row(
+            income, ROW_MAP["research_and_development"]
+        ),
         "total_assets": extract_row(balance, ROW_MAP["total_assets"]),
         "total_liabilities": extract_row(balance, ROW_MAP["total_liabilities"]),
         "total_equity": extract_row(balance, ROW_MAP["total_equity"]),
@@ -412,6 +482,8 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     net_income_ttm = compute_ttm_sum(net_income_q)
     ebitda_ttm = compute_ttm_sum(ebitda_q)
     free_cash_flow_ttm = compute_ttm_sum(free_cash_flow_q)
+    research_and_development_q = quarterly_metrics["research_and_development"]
+    research_and_development_ttm = compute_ttm_sum(research_and_development_q)
 
     total_equity_q = quarterly_metrics["total_equity"]
     total_assets_q = quarterly_metrics["total_assets"]
@@ -487,6 +559,13 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             f"{dq_summary['missing_fields']} missing fields"
         )
 
+    total_revenue_latest = latest_value(revenue_q)
+    r_and_d_ratio = None
+    if total_revenue_latest and total_revenue_latest != 0:
+        r_and_d_latest = latest_value(research_and_development_q)
+        if r_and_d_latest is not None:
+            r_and_d_ratio = float(r_and_d_latest / total_revenue_latest)
+
     analysis = {
         "symbol": payload.get("symbol"),
         "market": payload.get("market"),
@@ -500,6 +579,9 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             or info.get("shortBusinessSummary"),
             "country": info.get("country"),
             "website": info.get("website"),
+            "financial_currency": parse_financial_currency(
+                info.get("financialCurrency")
+            ),
         },
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "financials": {key: series_to_dict(value) for key, value in metrics.items()},
@@ -508,6 +590,7 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             "net_income": series_to_dict(net_income_q),
             "ebitda": series_to_dict(ebitda_q),
             "free_cash_flow": series_to_dict(free_cash_flow_q),
+            "research_and_development": series_to_dict(research_and_development_q),
             "diluted_avg_shares": series_to_dict(diluted_avg_shares_q),
         },
         "financials_ttm": {
@@ -515,6 +598,7 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             "net_income": series_to_dict(net_income_ttm),
             "ebitda": series_to_dict(ebitda_ttm),
             "free_cash_flow": series_to_dict(free_cash_flow_ttm),
+            "research_and_development": series_to_dict(research_and_development_ttm),
         },
         "per_share_quarterly": {
             "eps": series_to_dict(eps_q),
@@ -547,10 +631,29 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             "net_income_yoy": compute_yoy(metrics["net_income"]),
             "revenue_cagr": compute_cagr(metrics["revenue"]),
             "net_income_cagr": compute_cagr(metrics["net_income"]),
+            "revenue_yoy_quarterly": compute_growth_from_previous_year(revenue_q),
+            "net_income_yoy_quarterly": compute_growth_from_previous_year(net_income_q),
         },
         "price": {
             "history": series_to_dict(price_series),
             "latest": latest_value(price_series),
+        },
+        "expectations": {
+            "next_earnings_date": info.get("earningsDate"),
+            "revenue_growth_qoq": compute_growth_from_latest(revenue_q),
+            "revenue_growth_yoy": compute_growth_from_previous_year(revenue_q),
+            "net_income_growth_qoq": compute_growth_from_latest(net_income_q),
+            "net_income_growth_yoy": compute_growth_from_previous_year(net_income_q),
+            "revenue_guidance": info.get("revenueGrowth"),
+            "earnings_growth": info.get("earningsGrowth"),
+            "earnings_quarterly_growth": info.get("earningsQuarterlyGrowth"),
+        },
+        "segment": {
+            "revenue": info.get("revenueSegments"),
+            "geo": info.get("revenueByRegion"),
+        },
+        "research_and_development": {
+            "ratio": r_and_d_ratio,
         },
         "data_quality": {
             "validation": validation_summary,
