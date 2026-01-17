@@ -14,22 +14,11 @@ import config
 import fetch_data as fetch_data_module
 import report as report_module
 import valuation as valuation_module
-import visualize as visualize_module
 from exceptions import FinancialReportError, format_error_for_user
 from logging_config import get_module_logger, setup_logging
 from progress import step_progress
 
 logger = get_module_logger()
-
-
-CHART_FILES = [
-    "revenue_net_income.png",
-    "margin_trends.png",
-    "roe_roa.png",
-    "debt_to_equity.png",
-    "price_history.png",
-    "peg_ratio.png",
-]
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -83,17 +72,6 @@ def needs_update(output_path: Path, input_mtimes: Iterable[float]) -> bool:
     return output_path.stat().st_mtime < latest_input
 
 
-def charts_need_update(charts_dir: Path, input_mtimes: Iterable[float]) -> bool:
-    if not charts_dir.exists():
-        return True
-    latest_input = max(input_mtimes, default=0)
-    for filename in CHART_FILES:
-        chart_path = charts_dir / filename
-        if not chart_path.exists() or chart_path.stat().st_mtime < latest_input:
-            return True
-    return False
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate full report with caching and optional steps"
@@ -122,7 +100,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--skip-valuation", action="store_true")
     parser.add_argument("--skip-analyst", action="store_true")
-    parser.add_argument("--skip-charts", action="store_true")
     parser.add_argument("--skip-report", action="store_true")
     return parser.parse_args()
 
@@ -148,7 +125,6 @@ def main() -> None:
         valuation_path = output_dir / "valuation.json"
         analyst_path = output_dir / "analyst.json"
         report_path = output_dir / "report.md"
-        charts_dir = output_dir / "charts"
 
         price_years = args.price_years
         if price_years is None:
@@ -182,9 +158,6 @@ def main() -> None:
             if not args.skip_analyst:
                 logger.info("  - Extract analyst recommendations")
 
-            if not args.skip_charts:
-                logger.info(f"  - Generate {len(CHART_FILES)} charts")
-
             if not args.skip_report:
                 logger.info("  - Generate markdown report")
 
@@ -198,8 +171,6 @@ def main() -> None:
         if not args.skip_valuation:
             total_steps += 1
         if not args.skip_analyst:
-            total_steps += 1
-        if not args.skip_charts:
             total_steps += 1
         if not args.skip_report:
             total_steps += 1
@@ -283,21 +254,7 @@ def main() -> None:
                         analyst_payload = read_json(analyst_path)
                         logger.info(f"Using cache: {analyst_path}")
 
-            # Step 5: Generate charts
-            if not args.skip_charts:
-                with sp.step("Generating charts"):
-                    chart_inputs = [analysis_mtime]
-                    if not args.skip_valuation and valuation_path.exists():
-                        chart_inputs.append(valuation_path.stat().st_mtime)
-                    if charts_need_update(charts_dir, chart_inputs):
-                        visualize_module.generate_charts(
-                            analysis_payload, str(charts_dir), valuation_payload
-                        )
-                        logger.info(f"Saved to: {charts_dir}")
-                    else:
-                        logger.info(f"Using cache: {charts_dir}")
-
-            # Step 6: Generate report
+            # Step 5: Generate report
             if not args.skip_report:
                 with sp.step("Generating markdown report"):
                     report_inputs = [analysis_mtime]

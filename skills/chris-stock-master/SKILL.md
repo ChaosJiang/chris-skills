@@ -60,7 +60,6 @@ cat output/<SYMBOL>_report.md
 | `--years` | 财报年数 | 1 |
 | `--output` | 输出目录 | output |
 | `--refresh` | 强制刷新缓存 | false |
-| `--skip-charts` | 跳过图表生成 | false |
 
 ## 输出文件
 
@@ -73,13 +72,7 @@ output/
     ├── data.json           # 原始数据
     ├── analysis.json       # 分析结果
     ├── valuation.json      # 估值数据
-    ├── analyst.json        # 分析师预期
-    └── charts/             # 图表目录
-        ├── revenue_net_income.png
-        ├── margin_trends.png
-        ├── roe_roa.png
-        ├── debt_to_equity.png
-        └── price_history.png
+    └── analyst.json        # 分析师预期
 ```
 
 ## 呈现指南
@@ -90,7 +83,6 @@ output/
 2. 重点呈现估值分析（P/E 分位数、与同行对比）
 3. 展示关键财务指标趋势
 4. 最后给出投资建议摘要
-5. 如有图表，告知用户图表位置
 
 ## 常见问题
 
@@ -98,7 +90,6 @@ output/
 |------|----------|
 | A股数据获取失败 | 检查网络，akshare 需要访问国内数据源 |
 | 缓存数据过旧 | 使用 `--refresh` 强制刷新 |
-| 图表生成慢 | 使用 `--skip-charts` 跳过 |
 
 ## 注意事项
 
