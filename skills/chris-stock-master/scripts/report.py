@@ -57,6 +57,22 @@ def clean_text(value: Any) -> str:
     return text
 
 
+def to_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.replace(",", "").strip()
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
 def build_financial_table(analysis: dict[str, Any]) -> str:
     revenue = series_from_dict(analysis.get("financials", {}).get("revenue", {}))
     net_income = series_from_dict(analysis.get("financials", {}).get("net_income", {}))
@@ -204,15 +220,79 @@ def latest_series_value(series_map: dict[str, Any]) -> float | None:
     return None
 
 
+def build_core_summary(
+    analysis: dict[str, Any], valuation: dict[str, Any], analyst: dict[str, Any]
+) -> str:
+    items: list[str] = []
+    percentiles = valuation.get("percentiles", {})
+    pe_pct = percentiles.get("pe")
+    if isinstance(pe_pct, (int, float)):
+        items.append(f"- 估值分位: P/E 处于 {pe_pct:.2f}% 历史区间")
+
+    current_price = valuation.get("current", {}).get("price")
+    target_mean = analyst.get("price_targets", {}).get("mean")
+    if current_price is not None and target_mean is not None:
+        diff = format_value_change(target_mean, current_price)
+        items.append(f"- 分析师目标价空间: {diff}")
+
+    growth = analysis.get("growth", {})
+    revenue_yoy = growth.get("revenue_yoy_quarterly")
+    if isinstance(revenue_yoy, (int, float)):
+        items.append(f"- 最新收入 YoY(季度): {revenue_yoy * 100:.2f}%")
+
+    debt_ratio = latest_series_value(
+        analysis.get("ratios", {}).get("debt_to_equity", {})
+    )
+    if debt_ratio is not None:
+        items.append(f"- 财务杠杆: 负债权益比 {debt_ratio:.2f}")
+
+    missing_fields = (
+        analysis.get("data_quality", {})
+        .get("field_matching", {})
+        .get("missing_fields", 0)
+    )
+    if missing_fields:
+        items.append(f"- 数据完整性: 缺失字段 {missing_fields}")
+
+    if not items:
+        return ""
+    return "\n".join(["## 零、核心摘要", *items])
+
+
+def build_geo_risk_note(analysis: dict[str, Any]) -> str | None:
+    geo = analysis.get("segment", {}).get("geo")
+    if not isinstance(geo, dict) or not geo:
+        return None
+    risk_regions = {"china", "taiwan", "hong kong", "singapore", "asia"}
+    matched = []
+    for region in geo.keys():
+        normalized = str(region).strip().lower()
+        if any(key in normalized for key in risk_regions):
+            matched.append(region)
+    if not matched:
+        return None
+    return (
+        "- 区域风险提示: 收入涉及 "
+        + "、".join(matched)
+        + "，需关注监管与地缘政治影响。"
+    )
+
+
 def summarize_growth(analysis: dict[str, Any]) -> list[str]:
     growth = analysis.get("growth", {})
     revenue_cagr = growth.get("revenue_cagr")
     net_income_cagr = growth.get("net_income_cagr")
+    revenue_yoy = growth.get("revenue_yoy_quarterly")
+    net_income_yoy = growth.get("net_income_yoy_quarterly")
     lines = []
     if isinstance(revenue_cagr, (int, float)):
         lines.append(f"- 收入 CAGR: {revenue_cagr * 100:.2f}%")
     if isinstance(net_income_cagr, (int, float)):
         lines.append(f"- 净利润 CAGR: {net_income_cagr * 100:.2f}%")
+    if isinstance(revenue_yoy, (int, float)):
+        lines.append(f"- 收入 YoY(季度): {revenue_yoy * 100:.2f}%")
+    if isinstance(net_income_yoy, (int, float)):
+        lines.append(f"- 净利润 YoY(季度): {net_income_yoy * 100:.2f}%")
     return lines
 
 
@@ -236,6 +316,13 @@ def summarize_cashflow(analysis: dict[str, Any]) -> list[str]:
     return [f"- 最新自由现金流(TTM): {format_number(fcf)}"]
 
 
+def summarize_rnd(analysis: dict[str, Any]) -> list[str]:
+    rnd_ratio = analysis.get("research_and_development", {}).get("ratio")
+    if isinstance(rnd_ratio, (int, float)):
+        return [f"- 研发投入比: {rnd_ratio * 100:.2f}%"]
+    return []
+
+
 def summarize_balance_sheet(analysis: dict[str, Any]) -> list[str]:
     ratios = analysis.get("ratios", {})
     debt_ratio = latest_series_value(ratios.get("debt_to_equity", {}))
@@ -243,6 +330,108 @@ def summarize_balance_sheet(analysis: dict[str, Any]) -> list[str]:
     if debt_ratio is not None:
         lines.append(f"- 负债权益比: {debt_ratio:.2f}")
     return lines
+
+
+def build_growth_table(growth_map: dict[str, Any], title: str) -> str:
+    if not growth_map:
+        return ""
+    items = list(growth_map.items())
+    if not items:
+        return ""
+    rows = sorted(items, key=lambda item: item[0])[-4:]
+    table = [f"### {title}", "", "| 季度 | YoY |", "| --- | --- |"]
+    for date_key, value in rows:
+        table.append(f"| {date_key} | {format_percent(value)} |")
+    return "\n".join(table)
+
+
+def build_segment_table(analysis: dict[str, Any], data_key: str, title: str) -> str:
+    segment = analysis.get("segment", {})
+    segment_data = segment.get(data_key)
+    if not isinstance(segment_data, dict) or not segment_data:
+        return ""
+    table = [f"### {title}", "", "| 项目 | 收入占比 |", "| --- | --- |"]
+    for name, value in segment_data.items():
+        numeric = to_number(value)
+        if numeric is None:
+            continue
+        if numeric > 1:
+            pct = numeric / 100
+        else:
+            pct = numeric
+        table.append(f"| {name} | {pct * 100:.2f}% |")
+    return "\n".join(table)
+
+
+def build_expectations_section(analysis: dict[str, Any]) -> str:
+    expectations = analysis.get("expectations", {})
+    if not expectations:
+        return ""
+    lines = ["## 九、前瞻与催化剂"]
+    next_earnings = expectations.get("next_earnings_date")
+    if next_earnings:
+        lines.append(f"- 下一次财报日期: {next_earnings}")
+    revenue_qoq = expectations.get("revenue_growth_qoq")
+    revenue_yoy = expectations.get("revenue_growth_yoy")
+    net_income_qoq = expectations.get("net_income_growth_qoq")
+    net_income_yoy = expectations.get("net_income_growth_yoy")
+    revenue_guidance = expectations.get("revenue_guidance")
+    earnings_growth = expectations.get("earnings_growth")
+    earnings_quarterly_growth = expectations.get("earnings_quarterly_growth")
+    if any(isinstance(val, (int, float)) for val in [revenue_qoq, revenue_yoy]):
+        lines.append(
+            "- 收入增速: "
+            + ", ".join(
+                [
+                    f"QoQ {format_percent(revenue_qoq)}"
+                    if isinstance(revenue_qoq, (int, float))
+                    else "QoQ -",
+                    f"YoY {format_percent(revenue_yoy)}"
+                    if isinstance(revenue_yoy, (int, float))
+                    else "YoY -",
+                ]
+            )
+        )
+    if any(isinstance(val, (int, float)) for val in [net_income_qoq, net_income_yoy]):
+        lines.append(
+            "- 利润增速: "
+            + ", ".join(
+                [
+                    f"QoQ {format_percent(net_income_qoq)}"
+                    if isinstance(net_income_qoq, (int, float))
+                    else "QoQ -",
+                    f"YoY {format_percent(net_income_yoy)}"
+                    if isinstance(net_income_yoy, (int, float))
+                    else "YoY -",
+                ]
+            )
+        )
+    if any(
+        isinstance(val, (int, float))
+        for val in [revenue_guidance, earnings_growth, earnings_quarterly_growth]
+    ):
+        lines.append(
+            "- 指引/预期: "
+            + ", ".join(
+                [
+                    f"收入指引 {format_percent(revenue_guidance)}"
+                    if isinstance(revenue_guidance, (int, float))
+                    else "收入指引 -",
+                    f"盈利增长 {format_percent(earnings_growth)}"
+                    if isinstance(earnings_growth, (int, float))
+                    else "盈利增长 -",
+                    f"季度盈利增长 {format_percent(earnings_quarterly_growth)}"
+                    if isinstance(earnings_quarterly_growth, (int, float))
+                    else "季度盈利增长 -",
+                ]
+            )
+        )
+    business_notes = expectations.get("business_highlights")
+    if isinstance(business_notes, list) and business_notes:
+        lines.append("- 产品/业务进展: " + " / ".join(business_notes))
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
 
 
 def build_business_model_section(analysis: dict[str, Any]) -> str:
@@ -261,6 +450,7 @@ def build_business_model_section(analysis: dict[str, Any]) -> str:
     metrics_lines.extend(summarize_growth(analysis))
     metrics_lines.extend(summarize_profitability(analysis))
     metrics_lines.extend(summarize_cashflow(analysis))
+    metrics_lines.extend(summarize_rnd(analysis))
 
     if metrics_lines:
         lines.append("- 经营特征:")
@@ -281,6 +471,19 @@ def build_competitive_section(analysis: dict[str, Any]) -> str:
 
     lines.extend(summarize_profitability(analysis))
     lines.extend(summarize_balance_sheet(analysis))
+
+    geo_risk = build_geo_risk_note(analysis)
+    if geo_risk:
+        lines.append(geo_risk)
+
+    segment_business = build_segment_table(analysis, "revenue", "业务收入结构")
+    segment_geo = build_segment_table(analysis, "geo", "区域收入结构")
+    if segment_business:
+        lines.append("")
+        lines.append(segment_business)
+    if segment_geo:
+        lines.append("")
+        lines.append(segment_geo)
 
     if not lines:
         return "- 暂无竞争格局解读，建议补充同行与行业数据。"
@@ -326,6 +529,7 @@ def build_investment_section(
     fundamentals.extend(summarize_growth(analysis))
     fundamentals.extend(summarize_profitability(analysis))
     fundamentals.extend(summarize_balance_sheet(analysis))
+    fundamentals.extend(summarize_rnd(analysis))
     if fundamentals:
         lines.append("- 基本面提示:")
         lines.extend(fundamentals)
@@ -426,6 +630,8 @@ def build_report(
         f"生成时间: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
         f"数据更新时间: {data_fetched_at or '-'}",
         "",
+        build_core_summary(analysis, valuation, analyst),
+        "",
         "## 一、公司概况",
         f"- 公司名称: {company.get('name') or '-'}",
         f"- 行业: {company.get('industry') or '-'}",
@@ -444,6 +650,13 @@ def build_report(
         "## 四、财务分析",
         build_financial_table(analysis),
         "",
+        build_growth_table(
+            analysis.get("growth", {}).get("revenue_yoy", {}), "收入 YoY 趋势"
+        ),
+        build_growth_table(
+            analysis.get("growth", {}).get("net_income_yoy", {}), "净利润 YoY 趋势"
+        ),
+        "",
         "## 五、估值分析",
         build_valuation_table(valuation),
         build_currency_note(valuation),
@@ -457,9 +670,12 @@ def build_report(
         "![ROE与ROA](charts/roe_roa.png)",
         "![负债权益比](charts/debt_to_equity.png)",
         "![股价历史](charts/price_history.png)",
+        "![PEG](charts/peg_ratio.png)",
         "",
         "## 八、投资建议",
         build_investment_section(analysis, valuation, analyst),
+        "",
+        build_expectations_section(analysis),
         "",
     ]
 

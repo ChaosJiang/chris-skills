@@ -28,6 +28,7 @@ CHART_FILES = [
     "roe_roa.png",
     "debt_to_equity.png",
     "price_history.png",
+    "peg_ratio.png",
 ]
 
 
@@ -82,12 +83,13 @@ def needs_update(output_path: Path, input_mtimes: Iterable[float]) -> bool:
     return output_path.stat().st_mtime < latest_input
 
 
-def charts_need_update(charts_dir: Path, analysis_mtime: float) -> bool:
+def charts_need_update(charts_dir: Path, input_mtimes: Iterable[float]) -> bool:
     if not charts_dir.exists():
         return True
+    latest_input = max(input_mtimes, default=0)
     for filename in CHART_FILES:
         chart_path = charts_dir / filename
-        if not chart_path.exists() or chart_path.stat().st_mtime < analysis_mtime:
+        if not chart_path.exists() or chart_path.stat().st_mtime < latest_input:
             return True
     return False
 
@@ -284,9 +286,12 @@ def main() -> None:
             # Step 5: Generate charts
             if not args.skip_charts:
                 with sp.step("Generating charts"):
-                    if charts_need_update(charts_dir, analysis_mtime):
+                    chart_inputs = [analysis_mtime]
+                    if not args.skip_valuation and valuation_path.exists():
+                        chart_inputs.append(valuation_path.stat().st_mtime)
+                    if charts_need_update(charts_dir, chart_inputs):
                         visualize_module.generate_charts(
-                            analysis_payload, str(charts_dir)
+                            analysis_payload, str(charts_dir), valuation_payload
                         )
                         logger.info(f"Saved to: {charts_dir}")
                     else:
