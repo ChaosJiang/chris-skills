@@ -274,7 +274,7 @@ def build_core_summary(
 
     if not items:
         return ""
-    return "\n".join(["## 零、核心摘要", *items])
+    return "\n".join(["## 一、核心摘要", *items])
 
 
 def build_geo_risk_note(analysis: dict[str, Any]) -> str | None:
@@ -860,7 +860,7 @@ def build_report(
         "",
         build_core_summary(analysis, valuation, analyst),
         "",
-        "## 一、公司概况",
+        "## 二、公司概况",
         f"- 公司名称: {company.get('name') or '-'}",
         f"- 行业: {company.get('industry') or '-'}",
         f"- 领域: {company.get('sector') or '-'}",
@@ -869,13 +869,13 @@ def build_report(
         f"- 当前股价: {format_currency(valuation.get('current', {}).get('price'), currency)}",
         f"- 总市值: {format_currency(valuation.get('current', {}).get('market_cap'), currency)}",
         "",
-        "## 二、业务模式分析",
+        "## 三、业务模式分析",
         build_business_model_section(analysis),
         "",
-        "## 三、竞争格局",
+        "## 四、竞争格局",
         build_competitive_section(analysis),
         "",
-        "## 四、财务分析",
+        "## 五、财务分析",
         build_financial_table(analysis),
         "",
         build_growth_table(
@@ -885,20 +885,12 @@ def build_report(
             analysis.get("growth", {}).get("net_income_yoy", {}), "净利润 YoY 趋势"
         ),
         "",
-        "## 五、估值分析",
+        "## 六、估值分析",
         build_valuation_table(valuation),
         build_currency_note(valuation),
         "",
-        "## 六、分析师预期",
+        "## 七、分析师预期",
         build_analyst_section(analyst),
-        "",
-        "## 七、图表",
-        "![收入与净利润](charts/revenue_net_income.png)",
-        "![利润率趋势](charts/margin_trends.png)",
-        "![ROE与ROA](charts/roe_roa.png)",
-        "![负债权益比](charts/debt_to_equity.png)",
-        "![股价历史](charts/price_history.png)",
-        "![PEG](charts/peg_ratio.png)",
         "",
         "## 八、投资建议",
         build_investment_section(analysis, valuation, analyst),
