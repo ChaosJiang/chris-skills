@@ -4,6 +4,7 @@ description: 深度分析全球上市公司财报（美/日/港/A股）。提供
 ---
 
 ## 我能做什么
+
 - 默认获取 1 年财报与行情数据，可按需调整
 - 总结业务模式与竞争格局
 - 生成关键财务指标对比 (YoY/QoQ/CAGR)
@@ -12,11 +13,13 @@ description: 深度分析全球上市公司财报（美/日/港/A股）。提供
 - 生成 PNG 图表并输出投资建议
 
 ## 何时使用
+
 - 你需要快速分析某家上市公司财报
 - 你希望对比历史财务指标与估值变化
 - 你想把分析结果整理成结构化报告
 
 ## 输入示例
+
 - "分析 AAPL"
 - "分析 600519.SH 贵州茅台"
 - "分析 0700.HK 腾讯"
@@ -44,7 +47,7 @@ scripts/.venv/bin/python scripts/run_report.py --symbol AAPL --years 1 --output 
 - `--refresh` 强制刷新缓存
 - `--skip-valuation/--skip-analyst/--skip-charts` 加速
 
-详细分步操作见 [reference/advanced.md](reference/advanced.md)
+详细分步操作见 [references/advanced.md](references/advanced.md)
 
 ## 数据源
 
