@@ -1,0 +1,22 @@
+{
+  "name": "chris-skills",
+  "owner": {
+    "name": "Chris Jiang",
+    "email": "jzcmelody@gmail.com"
+  },
+  "metadata": {
+    "description": "Skills shared by Chris for improving daily work efficiency",
+    "version": "0.0.1"
+  },
+  "plugins": [
+    {
+      "name": "chris-skills",
+      "description": "Skills shared by Chris for improving daily work efficiency",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/chris-stock-master"
+      ]
+    }
+  ]
+}

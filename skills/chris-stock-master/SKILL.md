@@ -1,6 +1,6 @@
 ---
 name: chris-stock-master
-description: 深度分析全球上市公司财报（美/日/港/A股）。提供业务模式、竞争格局、历史对比、估值分析及投资建议。依赖 yfinance、akshare、pandas、matplotlib。
+description: 深度分析全球上市公司财报（美/日/港/A股）。提供业务模式、竞争格局、历史对比、估值分析及投资建议。依赖 yfinance、akshare、matplotlib、polars、numpy、requests。
 ---
 
 # Stock Master - 财报分析器
