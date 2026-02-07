@@ -5,7 +5,7 @@ import argparse
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from series_utils import series_from_mapping, series_rows
@@ -37,6 +37,25 @@ def format_percent(value: Any) -> str:
     return str(value)
 
 
+def normalize_ratio_value(value: Any, aggressive_small_percent: bool = False) -> float | None:
+    """Normalize ratio-like values that may come as 0-1 or 0-100."""
+    numeric = to_number(value)
+    if numeric is None:
+        return None
+    if 1 < abs(numeric) <= 100:
+        return numeric / 100
+    if aggressive_small_percent and 0.2 < abs(numeric) <= 1:
+        return numeric / 100
+    return numeric
+
+
+def format_ratio_percent(value: Any, aggressive_small_percent: bool = False) -> str:
+    normalized = normalize_ratio_value(
+        value, aggressive_small_percent=aggressive_small_percent
+    )
+    return format_percent(normalized) if normalized is not None else "-"
+
+
 def format_currency(value: Any, currency: str | None) -> str:
     if value is None:
         return "-"
@@ -55,6 +74,18 @@ def clean_text(value: Any) -> str:
         return ""
     text = re.sub(r"\s+", " ", text)
     return text
+
+
+def format_analysis_date(value: Any) -> str:
+    text = clean_text(value)
+    if not text:
+        return "-"
+    normalized = text.replace("Z", "+00:00") if text.endswith("Z") else text
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return text
+    return f"{dt.year}年{dt.month}月{dt.day}日"
 
 
 def to_number(value: Any) -> float | None:
@@ -317,6 +348,75 @@ def latest_series_value(series_map: dict[str, Any]) -> float | None:
     return None
 
 
+def normalize_segment_revenue(segment_revenue: Any) -> dict[str, float]:
+    """Normalize segment revenue to a simple name->value mapping."""
+    if not isinstance(segment_revenue, dict) or not segment_revenue:
+        return {}
+
+    direct_values: dict[str, float] = {}
+    for name, raw_value in segment_revenue.items():
+        numeric = to_number(raw_value)
+        if numeric is not None:
+            direct_values[str(name)] = numeric
+    if direct_values:
+        return direct_values
+
+    snapshots: list[tuple[str, dict[str, float]]] = []
+    for period, payload in segment_revenue.items():
+        if not isinstance(payload, dict):
+            continue
+        period_values: dict[str, float] = {}
+        for name, raw_value in payload.items():
+            numeric = to_number(raw_value)
+            if numeric is not None:
+                period_values[str(name)] = numeric
+        if period_values:
+            snapshots.append((str(period), period_values))
+
+    if not snapshots:
+        return {}
+    snapshots.sort(key=lambda item: item[0])
+    return snapshots[-1][1]
+
+
+def split_summary_points(summary: str, company_name: str | None = None) -> list[str]:
+    if not summary:
+        return []
+
+    text = clean_text(summary)
+    if not text:
+        return []
+
+    # Keep common company abbreviations from being treated as sentence boundaries.
+    text = re.sub(r"\b(Inc|Ltd|Corp|Co|LLC|plc)\.", r"\1", text)
+    text = text.replace("e.g.", "eg").replace("i.e.", "ie")
+
+    parts = re.split(r"[；;。！？!?]|(?<=\w)\.\s+(?=[A-Z])", text)
+    if len(parts) <= 1:
+        parts = re.split(r",\s+(?:and|while|with|including)\s+", text)
+
+    points: list[str] = []
+    for part in parts:
+        candidate = clean_text(part).rstrip(".")
+        if not candidate or len(candidate) < 18:
+            continue
+        if company_name and candidate.lower() == company_name.strip().lower():
+            continue
+        points.append(candidate)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for point in points:
+        key = point.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(point)
+        if len(deduped) >= 3:
+            break
+    return deduped
+
+
 def build_core_opinion(
     analysis: dict[str, Any], valuation: dict[str, Any], analyst: dict[str, Any]
 ) -> str:
@@ -332,7 +432,9 @@ def build_core_opinion(
     if not isinstance(net_income_yoy, (int, float)):
         net_income_yoy = latest_series_value(growth.get("net_income_yoy", {}))
 
-    trend_source = revenue_yoy if isinstance(revenue_yoy, (int, float)) else net_income_yoy
+    trend_source = (
+        revenue_yoy if isinstance(revenue_yoy, (int, float)) else net_income_yoy
+    )
     trend_word = "稳定"
     if isinstance(trend_source, (int, float)):
         if trend_source >= 0.15:
@@ -362,9 +464,17 @@ def build_core_opinion(
             valuation_status = "偏高"
         else:
             valuation_status = "合理"
-        sentences.append(
-            f"估值方面，P/E 分位约 {pe_pct:.0f}% ，整体{valuation_status}。"
-        )
+        sentences.append(f"估值方面，P/E 分位约 {pe_pct:.0f}%，整体{valuation_status}。")
+
+    free_cash_flow = latest_series_value(
+        analysis.get("financials_ttm", {}).get("free_cash_flow", {})
+    )
+    debt_to_equity = latest_series_value(analysis.get("ratios", {}).get("debt_to_equity", {}))
+    if free_cash_flow is not None:
+        if free_cash_flow > 0 and (debt_to_equity is None or debt_to_equity <= 0.6):
+            sentences.append("现金流与资产负债表整体稳健，具备继续投入与抗波动能力。")
+        elif debt_to_equity is not None and debt_to_equity > 1:
+            sentences.append("杠杆水平偏高，后续需关注盈利兑现与现金流安全边际。")
 
     return "\n".join(sentences) if sentences else "暂无核心观点，建议补充增长与估值数据。"
 
@@ -388,6 +498,9 @@ def build_financial_highlights(
     net_income_annual = latest_series_value(financials.get("net_income", {}))
     revenue_quarter = latest_series_value(financials_q.get("revenue", {}))
     net_income_quarter = latest_series_value(financials_q.get("net_income", {}))
+    eps_ttm = latest_series_value(analysis.get("per_share_ttm", {}).get("eps", {}))
+    latest_cash = latest_series_value(analysis.get("balance_quarterly", {}).get("cash", {}))
+    latest_fcf = latest_series_value(analysis.get("financials_ttm", {}).get("free_cash_flow", {}))
 
     revenue_yoy = latest_series_value(growth.get("revenue_yoy", {}))
     net_income_yoy = latest_series_value(growth.get("net_income_yoy", {}))
@@ -437,6 +550,18 @@ def build_financial_highlights(
     if profit_parts:
         lines.append(f"- **盈利能力提升**: " + "；".join(profit_parts))
 
+    cash_parts: list[str] = []
+    if latest_cash is not None:
+        cash_parts.append(f"现金储备约 {emphasize(format_compact_currency(latest_cash, currency))}")
+    if latest_fcf is not None:
+        cash_parts.append(
+            f"自由现金流(TTM)约 {emphasize(format_compact_currency(latest_fcf, currency))}"
+        )
+    if eps_ttm is not None:
+        cash_parts.append(f"EPS(TTM)约 {emphasize(format_number(eps_ttm))}")
+    if cash_parts:
+        lines.append(f"- **现金与资本效率**: " + "；".join(cash_parts))
+
     market_cap = valuation.get("current", {}).get("market_cap")
     price = valuation.get("current", {}).get("price")
     if market_cap is not None or price is not None:
@@ -461,49 +586,56 @@ def build_product_research(analysis: dict[str, Any]) -> str:
     company = analysis.get("company", {})
     currency = company.get("financial_currency") or company.get("currency")
     segment = analysis.get("segment", {})
-    segment_revenue = segment.get("revenue")
+    segment_revenue = normalize_segment_revenue(segment.get("revenue"))
 
-    if isinstance(segment_revenue, dict) and segment_revenue:
-        items: list[tuple[str, float]] = []
-        for name, value in segment_revenue.items():
-            numeric = to_number(value)
-            if numeric is None:
-                continue
-            items.append((str(name), numeric))
-        if items:
-            items.sort(key=lambda item: item[1], reverse=True)
-            total = sum(abs(value) for _, value in items)
-            use_ratio = (
-                total > 0
-                and all(abs(value) <= 1 for _, value in items)
-                and total <= 1.2
+    lines = ["核心产品线表现", ""]
+    if segment_revenue:
+        items = sorted(segment_revenue.items(), key=lambda item: item[1], reverse=True)
+        total = sum(abs(value) for _, value in items)
+        use_ratio = total > 0 and all(abs(value) <= 1 for _, value in items) and total <= 1.2
+        use_percent = (
+            total > 0
+            and all(abs(value) <= 100 for _, value in items)
+            and 80 <= total <= 120
+        )
+        for name, value in items[:6]:
+            if use_ratio:
+                content = f"收入占比 {value * 100:.2f}%"
+            elif use_percent:
+                content = f"收入占比 {value:.2f}%"
+            else:
+                content = f"收入 {format_compact_currency(value, currency)}"
+            lines.append(f"- **{name}**: {content}")
+    else:
+        summary_points = split_summary_points(
+            clean_text(company.get("summary")), company.get("name")
+        )
+        if summary_points:
+            for point in summary_points:
+                lines.append(f"- {point}")
+        else:
+            lines.append("- 暂无产品线拆分信息，建议补充业务分部披露。")
+
+    r_and_d_ratio = analysis.get("research_and_development", {}).get("ratio")
+    expectations = analysis.get("expectations", {})
+    if isinstance(r_and_d_ratio, (int, float)) or expectations:
+        lines.extend(["", "研发与新产品", ""])
+        if isinstance(r_and_d_ratio, (int, float)):
+            lines.append(
+                f"- 研发投入强度约 {format_percent(r_and_d_ratio)}，持续支持产品迭代与技术积累。"
             )
-            use_percent = (
-                total > 0
-                and all(abs(value) <= 100 for _, value in items)
-                and 80 <= total <= 120
-            )
-            lines = ["核心产品线表现", ""]
-            for name, value in items:
-                if use_ratio:
-                    content = f"收入占比 {value * 100:.2f}%"
-                elif use_percent:
-                    content = f"收入占比 {value:.2f}%"
-                else:
-                    content = f"收入 {format_compact_currency(value, currency)}"
-                lines.append(f"- **{name}**: {content}")
-            return "\n".join(lines)
 
-    summary = clean_text(company.get("summary"))
-    if summary:
-        sentences = re.split(r"[。.!?]", summary)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        lines = ["核心产品线表现", ""]
-        for sentence in sentences[:3]:
-            lines.append(f"- {sentence}")
-        return "\n".join(lines)
+        revenue_growth_qoq = expectations.get("revenue_growth_qoq")
+        earnings_growth = expectations.get("earnings_growth")
+        if isinstance(revenue_growth_qoq, (int, float)) or isinstance(earnings_growth, (int, float)):
+            growth_parts = []
+            if isinstance(revenue_growth_qoq, (int, float)):
+                growth_parts.append(f"季度收入环比 {format_percent(revenue_growth_qoq)}")
+            if isinstance(earnings_growth, (int, float)):
+                growth_parts.append(f"盈利预期增速 {format_percent(earnings_growth)}")
+            lines.append("- 近期经营动能: " + "，".join(growth_parts))
 
-    return "- 暂无产品线拆分信息，建议补充业务分部披露。"
+    return "\n".join(lines)
 
 
 def build_management_guidance(analysis: dict[str, Any]) -> str:
@@ -534,14 +666,19 @@ def build_management_guidance(analysis: dict[str, Any]) -> str:
     dividend_rate = company.get("dividend_rate")
     dividend_yield = company.get("dividend_yield")
     payout_ratio = company.get("payout_ratio")
-    if any(isinstance(val, (int, float)) for val in [dividend_rate, dividend_yield, payout_ratio]):
+    if any(
+        isinstance(val, (int, float))
+        for val in [dividend_rate, dividend_yield, payout_ratio]
+    ):
         details = []
         if isinstance(dividend_rate, (int, float)):
             details.append(f"每股分红 {emphasize(format_currency(dividend_rate, currency))}")
         if isinstance(dividend_yield, (int, float)):
-            details.append(f"股息率 {emphasize(format_percent(dividend_yield))}")
+            details.append(
+                f"股息率 {emphasize(format_ratio_percent(dividend_yield, aggressive_small_percent=True))}"
+            )
         if isinstance(payout_ratio, (int, float)):
-            details.append(f"派息率 {emphasize(format_percent(payout_ratio))}")
+            details.append(f"派息率 {emphasize(format_ratio_percent(payout_ratio))}")
         lines.append(f"- **股东回报**: " + "，".join(details))
 
     if not lines:
@@ -1087,7 +1224,7 @@ def build_investment_section(
         if valuation_insights:
             lines.append("- 估值合理性分析:")
             for insight in valuation_insights:
-                lines.append(f"  * {insight}")
+                lines.append(f"- {insight}")
 
     fundamentals = []
     fundamentals.extend(summarize_growth(analysis))
@@ -1097,6 +1234,38 @@ def build_investment_section(
     if fundamentals:
         lines.append("- 基本面提示:")
         lines.extend(fundamentals)
+
+    pe_pct = percentiles.get("pe")
+    revenue_yoy_quarterly = analysis.get("growth", {}).get("revenue_yoy_quarterly")
+    sentiment_score = 0
+    if isinstance(pe_pct, (int, float)):
+        if pe_pct <= 30:
+            sentiment_score += 1
+        elif pe_pct >= 80:
+            sentiment_score -= 1
+    if isinstance(revenue_yoy_quarterly, (int, float)):
+        if revenue_yoy_quarterly >= 0.12:
+            sentiment_score += 1
+        elif revenue_yoy_quarterly < 0:
+            sentiment_score -= 1
+    if isinstance(current_price, (int, float)) and isinstance(target_mean, (int, float)):
+        if target_mean >= current_price * 1.1:
+            sentiment_score += 1
+        elif target_mean <= current_price * 0.9:
+            sentiment_score -= 1
+    if isinstance(current_price, (int, float)) and isinstance(dcf_value, (int, float)):
+        if dcf_value >= current_price * 1.1:
+            sentiment_score += 1
+        elif dcf_value <= current_price * 0.9:
+            sentiment_score -= 1
+
+    if sentiment_score >= 2:
+        conclusion = "偏积极，增长与估值匹配度较好，可关注回调后的中长期配置机会。"
+    elif sentiment_score <= -2:
+        conclusion = "偏谨慎，估值与兑现节奏存在压力，建议等待更好安全边际。"
+    else:
+        conclusion = "中性偏观察，建议结合后续财报验证增长持续性。"
+    lines.append(f"- 结论: {conclusion}")
 
     if not lines:
         return "- 暂无投资建议输出，建议补充财务与估值数据后再生成。"
@@ -1180,41 +1349,72 @@ def build_data_quality_section(analysis: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_report_title(analysis: dict[str, Any], valuation: dict[str, Any]) -> str:
+    company = analysis.get("company", {})
+    company_name = company.get("name") or analysis.get("symbol") or "该公司"
+    growth = analysis.get("growth", {})
+    revenue_yoy = growth.get("revenue_yoy_quarterly")
+
+    if isinstance(revenue_yoy, (int, float)):
+        if revenue_yoy >= 0.15:
+            growth_tag = "增长加速"
+        elif revenue_yoy >= 0.05:
+            growth_tag = "稳健增长"
+        elif revenue_yoy >= 0:
+            growth_tag = "增长放缓"
+        else:
+            growth_tag = "增长承压"
+    else:
+        growth_tag = "经营趋势跟踪"
+
+    pe_pct = valuation.get("percentiles", {}).get("pe")
+    if isinstance(pe_pct, (int, float)):
+        if pe_pct >= 80:
+            valuation_tag = "估值偏高"
+        elif pe_pct <= 30:
+            valuation_tag = "估值具吸引力"
+        else:
+            valuation_tag = "估值处中枢"
+    else:
+        valuation_tag = "估值待验证"
+
+    return f"{company_name}财报深度分析：{growth_tag}，{valuation_tag}"
+
+
 def build_report(
     analysis: dict[str, Any], valuation: dict[str, Any], analyst: dict[str, Any]
 ) -> str:
-    company = analysis.get("company", {})
-    symbol = analysis.get("symbol")
     data_fetched_at = analysis.get("data_fetched_at")
+    title = build_report_title(analysis, valuation)
+    opening = build_core_opinion(analysis, valuation, analyst)
+    analysis_date = format_analysis_date(data_fetched_at or analysis.get("generated_at"))
 
     report_lines: list[str] = [
-        f"# 财报分析报告 - {company.get('name') or symbol}",
+        f"# {title}",
         "",
-        f"生成时间: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
-        f"数据更新时间: {data_fetched_at or '-'}",
+        opening,
         "",
-        "## 1. 核心观点",
-        build_core_opinion(analysis, valuation, analyst),
+        f"分析时点: {analysis_date}",
         "",
-        "## 2. 财务亮点 (Financial Highlight)",
+        "## 1. 财务亮点 (Financial Highlight)",
         build_financial_highlights(analysis, valuation),
         "",
-        "## 3. 产品研究 (Product Research)",
+        "## 2. 产品研究 (Product Research)",
         build_product_research(analysis),
         "",
-        "## 4. 竞争格局 (Competitive Landscape)",
+        "## 3. 竞争格局 (Competitive Landscape)",
         build_competitive_section(analysis),
         "",
-        "## 5. 管理层指引 (Management Guidance)",
+        "## 4. 管理层指引 (Management Guidance)",
         build_management_guidance(analysis),
         "",
-        "## 6. 估值分析",
+        "## 5. 估值分析",
         build_valuation_table(valuation),
         build_currency_note(valuation),
         "",
         build_chart_references(),
         "",
-        "## 7. 投资建议",
+        "## 6. 投资建议",
         build_investment_section(analysis, valuation, analyst),
         "",
     ]
