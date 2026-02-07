@@ -70,6 +70,13 @@ cd "$SKILL_DIR"
 scripts/.venv/bin/python scripts/run_report.py --symbol <SYMBOL> --output /path/to/output
 ```
 
+如需尽可能使用最新披露数据，建议：
+
+```bash
+cd "$SKILL_DIR"
+scripts/.venv/bin/python scripts/run_report.py --symbol <SYMBOL> --years 2 --refresh
+```
+
 ## 输出文件
 
 每个公司的文件放在独立文件夹中：`output/<SYMBOL>_<MARKET>/`

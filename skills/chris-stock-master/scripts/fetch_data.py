@@ -102,6 +102,33 @@ def parse_period_date(value: Any) -> datetime | None:
     return None
 
 
+def column_has_values(df: Any, column: Any) -> bool:
+    """Return True if dataframe column contains at least one non-null value."""
+    try:
+        series = df[column]
+    except Exception:
+        return False
+
+    try:
+        if hasattr(series, "notna"):
+            return bool(series.notna().any())
+    except Exception:
+        pass
+
+    try:
+        values = list(series)
+    except Exception:
+        return False
+
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, float) and np.isnan(value):
+            continue
+        return True
+    return False
+
+
 def trim_statement_columns(df: Any, max_periods: int) -> Any:
     if df is None or max_periods <= 0:
         return df
@@ -122,7 +149,12 @@ def trim_statement_columns(df: Any, max_periods: int) -> Any:
 
     if dated_columns:
         dated_columns.sort(key=lambda pair: pair[0], reverse=True)
-        keep_set = {col for _, col in dated_columns[:max_periods]}
+        valid_columns = [
+            col for _, col in dated_columns if column_has_values(df, col)
+        ]
+        fallback_columns = [col for _, col in dated_columns if col not in valid_columns]
+        ordered_columns = valid_columns + fallback_columns
+        keep_set = set(ordered_columns[:max_periods])
         keep = [col for col in column_list if col in keep_set]
     else:
         keep = column_list[:max_periods]
