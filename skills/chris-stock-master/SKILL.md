@@ -41,7 +41,7 @@ fi
 
 ```bash
 cd "$SKILL_DIR"
-scripts/.venv/bin/python scripts/run_report.py --symbol <SYMBOL> --output output
+scripts/.venv/bin/python scripts/run_report.py --symbol <SYMBOL>
 ```
 
 ### 3. 读取并呈现结果
@@ -49,7 +49,9 @@ scripts/.venv/bin/python scripts/run_report.py --symbol <SYMBOL> --output output
 分析完成后，读取生成的报告文件并向用户呈现关键信息：
 
 ```bash
-cat output/<SYMBOL>_report.md
+SYMBOL="<SYMBOL>"
+SYMBOL_SAFE="${SYMBOL//./_}"
+cat output/${SYMBOL_SAFE}_*/report.md
 ```
 
 ## 参数说明
@@ -58,8 +60,15 @@ cat output/<SYMBOL>_report.md
 |------|------|--------|
 | `--symbol` | 股票代码 | 必填 |
 | `--years` | 财报年数 | 1 |
-| `--output` | 输出目录 | output |
+| `--output` | 输出根目录（公司子目录会自动创建） | `$SKILL_DIR/output` |
 | `--refresh` | 强制刷新缓存 | false |
+
+如需改输出位置，显式传参覆盖默认值：
+
+```bash
+cd "$SKILL_DIR"
+scripts/.venv/bin/python scripts/run_report.py --symbol <SYMBOL> --output /path/to/output
+```
 
 ## 输出文件
 
