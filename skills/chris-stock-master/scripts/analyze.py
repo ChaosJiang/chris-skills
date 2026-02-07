@@ -595,6 +595,9 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             "financial_currency": parse_financial_currency(
                 info.get("financialCurrency")
             ),
+            "dividend_rate": info.get("dividendRate"),
+            "dividend_yield": info.get("dividendYield"),
+            "payout_ratio": info.get("payoutRatio"),
         },
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "financials": {key: series_to_dict(value) for key, value in metrics.items()},
